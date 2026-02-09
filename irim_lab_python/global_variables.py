@@ -9,4 +9,7 @@
 
 EXTENSION_TITLE = "irim_lab"
 
+SIM2SIM_TITLE = "sim2sim_test"
+SENSOR_LAB_TITLE = "sensor_test"
+
 EXTENSION_DESCRIPTION = ""

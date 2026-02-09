@@ -21,7 +21,7 @@ from isaacsim.gui.components.menu import MenuItemDescription
 from omni.kit.menu.utils import add_menu_items, remove_menu_items
 from omni.usd import StageEventType
 
-from .global_variables import EXTENSION_DESCRIPTION, EXTENSION_TITLE
+from .global_variables import EXTENSION_TITLE, SENSOR_LAB_TITLE, SIM2SIM_TITLE
 from .ui_builder import UIBuilder
 from .sensor_lab_ui_builder import SensorLabUIBuilder
 from .core.asset_manager import ALLEXAssetManager
@@ -54,7 +54,7 @@ class Extension(omni.ext.IExt):
 
         # Build Window
         self._window = ui.Window(
-            title=EXTENSION_TITLE, 
+            title=SIM2SIM_TITLE, 
             width=400, 
             height=500, 
             visible=False, 
@@ -68,19 +68,19 @@ class Extension(omni.ext.IExt):
         action_registry = omni.kit.actions.core.get_action_registry()
         action_registry.register_action(
             ext_id,
-            f"CreateUIExtension:{EXTENSION_TITLE}",
+            f"CreateUIExtension:{SIM2SIM_TITLE}",
             self._menu_callback,
-            description=f"Add {EXTENSION_TITLE} Extension to UI toolbar",
+            description=f"Add {SIM2SIM_TITLE} Extension to UI toolbar",
         )
         action_registry.register_action(
             ext_id,
-            "CreateUIExtension:allex_sensor_lab",
+            f"CreateUIExtension:{SENSOR_LAB_TITLE}",
             self._sensor_lab_menu_callback,
             description="Load ALLEX Sensor Test Asset",
         )
         self._menu_items = [
-            MenuItemDescription(name=EXTENSION_TITLE, onclick_action=(ext_id, f"CreateUIExtension:{EXTENSION_TITLE}")),
-            MenuItemDescription(name="allex_sensor_lab", onclick_action=(ext_id, "CreateUIExtension:allex_sensor_lab"))
+            MenuItemDescription(name=SIM2SIM_TITLE, onclick_action=(ext_id, f"CreateUIExtension:{SIM2SIM_TITLE}")),
+            MenuItemDescription(name=SENSOR_LAB_TITLE, onclick_action=(ext_id, f"CreateUIExtension:{SENSOR_LAB_TITLE}"))
         ]
 
         add_menu_items(self._menu_items, EXTENSION_TITLE)
@@ -113,8 +113,8 @@ class Extension(omni.ext.IExt):
         remove_menu_items(self._menu_items, EXTENSION_TITLE)
 
         action_registry = omni.kit.actions.core.get_action_registry()
-        action_registry.deregister_action(self.ext_id, f"CreateUIExtension:{EXTENSION_TITLE}")
-        action_registry.deregister_action(self.ext_id, "CreateUIExtension:allex_sensor_lab")
+        action_registry.deregister_action(self.ext_id, f"CreateUIExtension:{SIM2SIM_TITLE}")
+        action_registry.deregister_action(self.ext_id, f"CreateUIExtension:{SENSOR_LAB_TITLE}")
 
         if self._window:
             self._window = None
@@ -126,6 +126,8 @@ class Extension(omni.ext.IExt):
         gc.collect()
 
     def _on_window(self, visible):
+        if not getattr(self, "_window", None):
+            return
         if self._window.visible:
             # Subscribe to Stage and Timeline Events (중복 구독 방지)
             if not hasattr(self, '_timeline_event_sub') or self._timeline_event_sub is None:
@@ -171,16 +173,22 @@ class Extension(omni.ext.IExt):
     #################################################################
 
     def _menu_callback(self):
+        if not getattr(self, "_window", None):
+            return
         self._window.visible = not self._window.visible
         self.ui_builder.on_menu_callback()
 
     def _sensor_lab_menu_callback(self):
-        """allex_sensor_lab 메뉴 클릭 시 센서 랩 창 열기"""
+        """{SENSOR_LAB_TITLE} 메뉴 클릭 시 센서 랩 창 열기"""
+        if not getattr(self, "_sensor_lab_window", None):
+            return
         self._sensor_lab_window.visible = not self._sensor_lab_window.visible
         self.sensor_lab_ui_builder.on_menu_callback()
     
     def _on_sensor_lab_window(self, visible):
         """센서 랩 창 가시성 변경 시 호출"""
+        if not getattr(self, "_sensor_lab_window", None):
+            return
         if self._sensor_lab_window.visible:
             # 타임라인 이벤트 구독 (메인 윈도우와 독립적으로)
             if not hasattr(self, '_timeline_event_sub') or self._timeline_event_sub is None:
@@ -231,8 +239,8 @@ class Extension(omni.ext.IExt):
             self._physx_subscription = None
             self.ui_builder.cleanup()
 
-            # ← 추가: 창이 열려있다면 UI 즉시 재구축
-            if self._window and self._window.visible:
+            # 창이 열려있다면 UI 즉시 재구축
+            if getattr(self, "_window", None) and self._window.visible:
                 self._build_ui()
 
         self.ui_builder.on_stage_event(event)
