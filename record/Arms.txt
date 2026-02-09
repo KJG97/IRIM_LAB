@@ -1,0 +1,19 @@
+
+[Arms Section]
+
+(Action)
+팔을 가볍게 앞으로 뻗고,전완을 살짝 회전시키며 관객에게 구조를 보여줌. 오른팔 엘보우를 살짝 접어 올렸다 폈다.
+(ALLEX script)
+
+Now, let me move on to the breakthrough we achieved with the arms.
+Inside my arms is WIRobotics’ breakthrough actuator architecture — purpose-built for natural human-robot interaction. 
+It features just one-eleventh the friction and one-twenty-fourth the rotational inertia of conventional actuators (12/90)
+
+(Action)
+7개중 5개 구동부가 상완에 있다는 말을 할때 어깨부위 contact 없이 sweeping
+(ALLEX script)
+And among the seven actuators that drive each arm, five are placed in my upper arm — reducing the weight of my forearm and wrist 
+so I can move quickly, lightly, and with human-like agility. (11/101)
+(Action) 
+팔을 부드럽게 흔들어 민첩성을 시각화.
+(ALLEX script)This is what makes my arms highly backdrivable,fast to respond, and safe to touch — even during unexpected contact. (7/108)

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Isaac Sim
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary
+*.tmp
+*.temp
+*.bak
+
+# Large file (폴더에서 삭제했어도, 나중에 다시 넣을 때 실수로 커밋 방지)
+asset/ALLEX/ALLEX_Param_text_sim_only.txt

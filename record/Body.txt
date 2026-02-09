@@ -1,0 +1,14 @@
+Neck & Waist Section
+(Action) 
+허리를 앞으로 20~30° 숙였다가 스르륵 자연스럽게 돌아옴. 이어서 목을 상하/좌우로 부드럽게 회전.
+(ALLEX script) 
+Both my waist and neck use passive gravity-compensation mechanisms,balancing the weight of my upper body. 
+This allows smooth, energy-efficient, naturally compliant movement. (9/117)
+
+⚙️ Full-body Capability (DOF 설명)
+(Action)
+발레 ‘앙바＇에서 왼쪽 살짝 뒤로 팔을 뻣는 자세 취하며 
+
+(ALLEX script)
+With a 15-DOF hand, a 7-DOF arm, and additional DOFs in my neck and waist, 
+I bring together 48 degrees of freedom to produce coherent, human-like motion. (12/129)

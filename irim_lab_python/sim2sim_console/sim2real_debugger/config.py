@@ -1,0 +1,104 @@
+from dataclasses import dataclass
+from typing import List
+
+# observation freshness (ROS streaming)
+OBS_TIMEOUT_SEC = 1.0
+
+
+@dataclass
+class DebuggerConfig:
+    num_joints: int = 18
+    action_dim: int = 19  # 상한: 18 joint + 1 playback_speed. 실제는 로드된 모델 출력 차원(보통 18) 사용
+    # UI 갱신 주기(Hz). 액션 계산 주기와 분리.
+    update_hz: int = 30
+    # 액션 계산/퍼블리시 주기(Hz). 학습 control rate(50Hz)에 맞춤.
+    control_hz: int = 50
+    buffer_size: int = 200
+    plot_update_hz: int = 30
+    # 인퍼런스 최대 수행 시간 (초) - 0이면 무제한
+    infer_duration_s: float = 5.0
+
+
+ALLEX_ACTION_JOINT_NAMES: List[str] = [
+    "R_Shoulder_Pitch_Joint",
+    "R_Shoulder_Roll_Joint",
+    "R_Shoulder_Yaw_Joint",
+    "R_Elbow_Joint",
+    "R_Wrist_Yaw_Joint",
+    "R_Wrist_Roll_Joint",
+    "R_Wrist_Pitch_Joint",
+    "R_Thumb_Yaw_Joint",
+    "R_Thumb_CMC_Joint",
+    "R_Thumb_MCP_Joint",
+    "R_Index_MCP_Joint",
+    "R_Index_PIP_Joint",
+    "R_Middle_MCP_Joint",
+    "R_Middle_PIP_Joint",
+    "R_Ring_MCP_Joint",
+    "R_Ring_PIP_Joint",
+    "R_Little_MCP_Joint",
+    "R_Little_PIP_Joint",
+]
+
+
+@dataclass(frozen=True)
+class ObsSpec:
+    name: str
+    start: int
+    dim: int
+    plot_enabled: bool
+    streaming: bool = False
+
+    @property
+    def end(self) -> int:
+        return self.start + self.dim - 1
+
+
+# 학습과 동일: last_action = action_manager.action = 처리된 관절 위치 18차원만 (playback_speed 제외)
+# PolicyCfg.history_length=3 → last_actions = 18*3 = 54차원
+# ProprioObsCfg: joint_pos(18) + reference_joint_pos(18) + right_hand_joint_torque(19) + right_hand_base_pos(7)
+# 총 차원: 54 + 18 + 18 + 19 + 7 = 116
+OBS_SPECS: List[ObsSpec] = [
+    ObsSpec("last_actions", 0, 54, True, False),        # 18*3 (policy group, history_length=3)
+    ObsSpec("joint_pos", 54, 18, True, True),           # 54~71
+    ObsSpec("reference_joint_pos", 72, 18, True, False),  # 72~89 (학습과 동일, ref 궤적 목표 위치)
+    ObsSpec("right_hand_joint_torque", 90, 19, True, True),     # 90~108
+    ObsSpec("right_hand_base_pos", 109, 7, True, True),         # 109~115
+]
+
+EXPECTED_TOTAL_OBS_DIM = max(spec.start + spec.dim for spec in OBS_SPECS)  # 116
+STREAMING_NAMES = {spec.name for spec in OBS_SPECS if spec.streaming}
+
+# ALLEX 로봇의 초기 자세 (init state) - inference가 안 돌아갈 때 이 값을 publish
+# ALLEX_ACTION_JOINT_NAMES 순서와 동일하게 정의됨
+ALLEX_INIT_POSE: List[float] = [
+    0.0,        # R_Shoulder_Pitch_Joint
+    0.0,        # R_Shoulder_Roll_Joint
+    0.0,        # R_Shoulder_Yaw_Joint
+    -1.5708,    # R_Elbow_Joint
+    3.49066,    # R_Wrist_Yaw_Joint
+    0.0,        # R_Wrist_Roll_Joint
+    0.0,        # R_Wrist_Pitch_Joint
+    0.0,        # R_Thumb_Yaw_Joint
+    0.872665,   # R_Thumb_CMC_Joint
+    0.349066,   # R_Thumb_MCP_Joint
+    0.0,        # R_Index_MCP_Joint
+    0.0,        # R_Index_PIP_Joint
+    0.0,        # R_Middle_MCP_Joint
+    0.0,        # R_Middle_PIP_Joint
+    0.0,        # R_Ring_MCP_Joint
+    0.0,        # R_Ring_PIP_Joint
+    0.0,        # R_Little_MCP_Joint
+    0.0,        # R_Little_PIP_Joint
+]
+
+__all__ = [
+    "DebuggerConfig",
+    "ObsSpec",
+    "OBS_SPECS",
+    "EXPECTED_TOTAL_OBS_DIM",
+    "STREAMING_NAMES",
+    "ALLEX_ACTION_JOINT_NAMES",
+    "ALLEX_INIT_POSE",
+    "OBS_TIMEOUT_SEC",
+]

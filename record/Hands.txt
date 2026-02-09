@@ -1,0 +1,42 @@
+[Hands Section]
+
+(ALLEX script)
+Let me start with my hands.   (1/24)
+
+(Action) 
+손을 앞으로 가져오고, 손가락을 천천히 펼쳤다가 오므림. 손등을 보여주고 손목 관절 움직이고 다시 손바닥 정면
+
+(ALLEX script)
+Each of my hands contains 20 joints and 15 active degrees of freedom. 
+High-force actuators are placed here in my forearm, 
+and the smaller motors for fine manipulation are embedded directly in my palm.  (11/35)
+
+This smart distribution gives me human-level dexterity in a compact form — combining precision, power, and highly backdrivable motion that makes contact both natural and safe.    (10/45)
+
+시연 2: Kapandji Test 
+
+(Action)
+양손 Kapandji Test 빠르게 시연하며
+
+(ALLEX script) 
+Let me show you true thumb–finger opposition using the Kapandji test. It's a core indicator of dexterity, and my demo was actually fast enough that Many who watched my Kapandji demo video believed it must have have been fast-forward. But as you can see now, it wasn't.
+(11/56)
+
+
+(ALLEX script) 
+And what you just saw is only one aspect of my dexterity. 
+(Action)
+손가락을 자연스럽게 펴며 설명.
+
+(ALLEX script)
+Each of my fingers can sense forces as small as 100 grams even without any additional sensors, 
+generate up to 40 newtons at the fingertip, and secure a hook grip strong enough to lift more than 30 kilograms.     (15/71)
+
+시연 3: 손가락 깍지 후 반전 스트레칭
+
+(Action)
+두 손가락을 깍지낀 뒤, 팔을 앞으로 밀면서 손바닥을 가슴 앞 방향으로 뒤집어 쭉 펴는 동작.(매우 인간적인 동작—관객에게 ‘우와’ 반응을 유도)
+
+(ALLEX script)
+Power is important — but true dexterity also means being not only precise and controlled, 
+but truly flexible. (7/78)
