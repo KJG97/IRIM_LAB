@@ -9,9 +9,9 @@ from isaacsim.core.utils.viewports import set_camera_view
 from isaacsim.core.api.world import World
 from isaacsim.core.prims import SingleArticulation
 
-from .core.asset_manager import ALLEXAssetManager
-from .ui import SensorLabWorldControlsBuilder
-from .utils.constants import SENSOR_LAB_CAMERA_EYE, SENSOR_LAB_CAMERA_TARGET, SENSOR_LAB_CAMERA_PRIM_PATH
+from ..sim2sim_test.core.asset_manager import ALLEXAssetManager
+from ..sim2sim_test.ui_builder import SensorLabWorldControlsBuilder
+from ..sim2sim_test.utils.constants import SENSOR_LAB_CAMERA_EYE, SENSOR_LAB_CAMERA_TARGET, SENSOR_LAB_CAMERA_PRIM_PATH
 from .sensor_lab_joint_torque_test import JointTorqueTest
 
 

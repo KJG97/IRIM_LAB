@@ -22,9 +22,9 @@ from omni.kit.menu.utils import add_menu_items, remove_menu_items
 from omni.usd import StageEventType
 
 from .global_variables import EXTENSION_TITLE, SENSOR_LAB_TITLE, SIM2SIM_TITLE
-from .ui_builder import UIBuilder
-from .sensor_lab_ui_builder import SensorLabUIBuilder
-from .core.asset_manager import ALLEXAssetManager
+from .sim2sim_test.ui_builder import UIBuilder
+from .sensor_test.sensor_lab_ui_builder import SensorLabUIBuilder
+from .sim2sim_test.core.asset_manager import ALLEXAssetManager
 
 """
 This file serves as a basic template for the standard boilerplate operations

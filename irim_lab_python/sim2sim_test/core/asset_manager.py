@@ -23,8 +23,9 @@ class ALLEXAssetManager:
         """
         try:
             current_file = Path(__file__)
-            # core 폴더에서 상위로 이동하여 asset 폴더 찾기
-            asset_path = current_file.parent.parent.parent / "asset" / "ALLEX" / "ALLEX.usd"
+            # sim2sim_test/core → 확장 루트(IRIM_LAB)로 이동하여 asset 폴더 찾기
+            extension_root = current_file.parent.parent.parent  # irim_lab_python
+            asset_path = extension_root.parent / "asset" / "ALLEX" / "ALLEX.usd"
             path_to_robot_usd = str(asset_path.resolve())
 
             # 에셋이 존재하는지 확인
@@ -116,8 +117,9 @@ class ALLEXAssetManager:
         """
         try:
             current_file = Path(__file__)
-            # core 폴더에서 상위로 이동하여 asset 폴더 찾기
-            asset_path = current_file.parent.parent.parent / "asset" / "ALLEX" / "ALLEX_sensor_test.usd"
+            # sim2sim_test/core → 확장 루트(IRIM_LAB)로 이동하여 asset 폴더 찾기
+            extension_root = current_file.parent.parent.parent  # irim_lab_python
+            asset_path = extension_root.parent / "asset" / "ALLEX" / "ALLEX_sensor_test.usd"
             path_to_sensor_usd = str(asset_path.resolve())
 
             # 에셋이 존재하는지 확인

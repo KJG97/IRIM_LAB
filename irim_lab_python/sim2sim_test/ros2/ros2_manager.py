@@ -86,8 +86,7 @@ class ROS2IntegratedManager:
             
             # ROS2 노드 생성
             self._ros2_node = create_allex_ros2_node(
-                joint_callback=self._callback_handler.on_external_joint_command,
-                joint_torque_callback=self._callback_handler.on_joint_torque_command
+                joint_callback=self._callback_handler.on_external_joint_command
             )
             
             # 🆕 Manager의 토픽 모드를 Node에 동기화
@@ -371,40 +370,6 @@ class ROS2IntegratedManager:
             print(f"❌ Subscriber toggle error: {e}")
             return False, error_msg
             
-    def toggle_joint_torque_subscriber(self):
-        """14개 토크 토픽 Subscriber 토글"""
-        if not self._initialized or not self._ros2_node:
-            print("❌ ROS2 Manager not initialized!")
-            return False, "Torque Topics: ERROR (No Manager)"
-        
-        try:
-            if self._ros2_node.is_joint_torque_subscriber_enabled():  # 메서드명 변경
-                success = self._ros2_node.disable_joint_torque_subscriber()  # 메서드명 변경
-                status = "Torque Topics: OFF" if success else "Torque Topics: ERROR"
-                
-                # Scenario를 simulation mode로 전환
-                if success and self._scenario_ref:
-                    self._scenario_ref.set_torque_source_mode('disabled')
-            else:
-                success = self._ros2_node.enable_joint_torque_subscriber()  # 메서드명 변경
-                # 14개 토크 토픽 구독 성공 시 개수 표시
-                if success:
-                    topic_count = len(self._ros2_node._joint_torque_subscriber)
-                    status = f"Torque Topics: ON ({topic_count})"
-                else:
-                    status = "Torque Topics: FAILED"
-                
-                # Scenario를 external mode로 전환
-                if success and self._scenario_ref:
-                    self._scenario_ref.set_torque_source_mode('external')
-            
-            return success, status
-            
-        except Exception as e:
-            error_msg = f"Torque Topics: ERROR ({str(e)[:15]})"
-            print(f"❌ Torque Topics toggle error: {e}")
-            return False, error_msg
-
     def get_joint_controller(self):
         """Joint Controller 인스턴스 반환"""
         return self._joint_controller

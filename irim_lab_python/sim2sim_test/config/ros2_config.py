@@ -65,11 +65,6 @@ class ROS2Config:
         TOPIC_MODE_CURRENT: 'Current',
         TOPIC_MODE_DESIRED: 'Desired'
     }
-    # 통합 데이터 크기
-    UNIFIED_DATA_MIN_SIZE = 55  # 19개 torque + 36개 force
-    TORQUE_DATA_SIZE = 19       # 토크 데이터 개수
-    FORCE_DATA_SIZE = 12        # Force 벡터 개수 (12개 * 3축 = 36개)
-    FORCE_VECTOR_SIZE = 3       # 각 Force 벡터 크기 (x, y, z)
 
     # 오른손(R-Hand) 관절 인덱스 (joint_config.json 참고)
     R_HAND_JOINT_INDICES = [24, 25, 26, 27, 28, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48]
@@ -205,14 +200,6 @@ class ROS2Config:
         "theOne_neck": ["NP", "NY"]  # 2개 관절
     }
 
-    # 🆕 토크 시각화 가능한 관절 그룹들
-    TORQUE_ENABLED_GROUPS = [
-        "Arm_R_theOne",    # 오른팔 (7개 관절: RSP, RSR, RSY, REP, RWY, RWR, RWP)
-        "Arm_L_theOne",    # 왼팔 (7개 관절: LSP, LSR, LSY, LEP, LWY, LWR, LWP)  
-        "theOne_waist",    # 허리 (2개 관절: WY, WP)
-        "theOne_neck"      # 목 (2개 관절: NP, NY)
-    ]
-
     # 🆕 토픽 생성을 위한 헬퍼 메서드들
     @classmethod
     def get_outbound_topics_by_mode(cls, topic_mode):
@@ -253,31 +240,3 @@ class ROS2Config:
     def get_topic_mode_display_name(cls, topic_mode):
         """토픽 모드의 표시명 반환 (UI용)"""
         return cls.TOPIC_MODE_DISPLAY_NAMES.get(topic_mode, topic_mode)
-
-    @classmethod  
-    def get_torque_topics(cls):
-        """🔧 토크 시각화가 가능한 4개 토픽만 반환 (손가락 제외)
-        
-        Returns:
-            dict: {topic_name: {'joint_names': [...], 'group_name': '...'}} 형태
-        """
-        # 전체 토크 토픽에서 토크 시각화 가능한 그룹들만 필터링
-        all_torque_topics = cls.get_outbound_topics_by_mode(cls.TOPIC_MODE_TORQUE)
-        filtered_topics = {}
-        
-        for topic_name, topic_info in all_torque_topics.items():
-            group_name = topic_info['group_name']
-            if group_name in cls.TORQUE_ENABLED_GROUPS:
-                filtered_topics[topic_name] = topic_info
-        
-        return filtered_topics
-
-    @classmethod
-    def get_torque_topic_list(cls):
-        """🔧 토크 시각화가 가능한 4개 토픽명만 리스트로 반환 (구독용)
-        
-        Returns:
-            list: 토크 토픽명 리스트 (손가락 제외)
-        """
-        torque_topics = cls.get_torque_topics()
-        return list(torque_topics.keys())

@@ -4,8 +4,7 @@ ALLEX Digital Twin ROS2 노드 클래스
 
 from ..config import ROS2Config, ROS2Topics, ROS2QoS
 
-def create_allex_ros2_node(joint_callback=None, joint_torque_callback=None):
-    
+def create_allex_ros2_node(joint_callback=None):
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
@@ -14,39 +13,23 @@ def create_allex_ros2_node(joint_callback=None, joint_torque_callback=None):
 
     class ALLEXRos2Node(Node):
         """ALLEX 디지털 트윈 전용 ROS2 노드"""
-    
-        def __init__(self, joint_callback=None, joint_torque_callback=None):
+
+        def __init__(self, joint_callback=None):
             super().__init__(ROS2Config.NODE_NAME)
-            
-            # 콜백 함수들
             self._joint_callback = joint_callback
-            self._joint_torque_callback = joint_torque_callback
-            
-            # 🆕 토픽 모드 상태 관리
             self._current_topic_mode = ROS2Config.DEFAULT_TOPIC_MODE
-            
-            # Publisher/Subscriber 인스턴스들
             self._joint_publisher = None
             self._joint_obs_publisher = None
             self._right_hand_torque_publisher = None
             self._right_hand_base_pos_publisher = None
             self._joint_subscriber = None
-            
-
-            # 🆕 새로운 14개 토픽 subscribers
             self._outbound_subscribers = []
             self._current_subscribers = []
             self._desired_subscribers = []
-            self._joint_torque_subscriber = {}
-            
-            # 🆕 Policy action subscriber
             self._policy_action_subscriber = None
             self._policy_action_subscriber_enabled = False
-
-            # 상태 변수들
             self._publisher_enabled = False
             self._subscriber_enabled = False
-            self._joint_torque_subscriber_enabled = False
             self._outbound_subscriber_enabled = False
             
             self.get_logger().info(f'🎯 ALLEX ROS2 Node Ready - Topic Mode: {self._current_topic_mode}')
@@ -374,72 +357,6 @@ def create_allex_ros2_node(joint_callback=None, joint_torque_callback=None):
                 return self.enable_subscriber()
 
         # ========================================
-        # 🚀 Torque Subscriber 관리
-        # ========================================
-        def enable_joint_torque_subscriber(self):
-            """14개 토크 토픽 Subscriber 활성화"""
-            try:
-                if len(self._joint_torque_subscriber) == 0:
-                    qos_profile = self._create_qos_profile()
-                    
-                    # 14개 토크 토픽 가져오기
-                    torque_topics = ROS2Config.get_torque_topics()
-                    
-                    for topic_name, topic_info in torque_topics.items():
-                        try:
-                            subscriber = self.create_subscription(
-                                Float64MultiArray,  # JointState 대신 Float64MultiArray 사용
-                                topic_name,
-                                self._make_torque_callback(topic_info['joint_names'], topic_info['group_name']),
-                                qos_profile
-                            )
-                            self._joint_torque_subscriber[topic_name] = subscriber
-                            
-                        except Exception as e:
-                            self.get_logger().error(f"❌ Failed to subscribe to torque topic {topic_name}: {e}")
-                            # 실패 시 이미 생성된 subscriber들 정리
-                            self.disable_joint_torque_subscriber()
-                            return False
-                    
-                    self._joint_torque_subscriber_enabled = True
-                    self.get_logger().info(f"🚀 {len(self._joint_torque_subscriber)} Torque Topic Subscribers ENABLED")
-                    return True
-                else:
-                    self.get_logger().warn("⚠️ Torque Subscribers already exist")
-                    return True
-                    
-            except Exception as e:
-                self.get_logger().error(f"❌ Failed to enable torque subscribers: {e}")
-                return False
-        
-        def disable_joint_torque_subscriber(self):
-
-            try:
-                if len(self._joint_torque_subscriber) > 0:
-                    for topic_name, subscriber in self._joint_torque_subscriber.items():
-                        self.destroy_subscription(subscriber)
-
-                    self._joint_torque_subscriber.clear()
-                    self._joint_torque_subscriber_enabled = False
-                    self.get_logger().info("🚀 Torque Topic Subscribers DISABLED")
-                    return True
-                else:
-                    self.get_logger().warn("⚠️ Torque Topic Subscribers already disabled")
-                    return True
-                    
-            except Exception as e:
-                self.get_logger().error(f"❌ Failed to disable torque subscribers: {e}")
-                return False
-
-        def _make_torque_callback(self, joint_names, group_name):
-            """토크 토픽용 콜백 생성"""
-            def callback(msg):
-                if self._joint_torque_callback:
-                    # 토크 데이터를 joint_torque_callback으로 전달
-                    self._joint_torque_callback(msg.data, joint_names, group_name, 'torque')
-            return callback
-        
-        # ========================================
         # 🔧 헬퍼 메서드들
         # ========================================
         def _create_qos_profile(self):
@@ -474,14 +391,8 @@ def create_allex_ros2_node(joint_callback=None, joint_torque_callback=None):
                 'publisher': 'ON' if self._publisher_enabled else 'OFF',
                 'subscriber': 'ON' if self._outbound_subscriber_enabled else 'OFF',
                 'outbound_subscribers': f'ON ({total_subscribers})' if self._outbound_subscriber_enabled else 'OFF',
-                'joint_torque_subscriber': 'ON' if self._joint_torque_subscriber_enabled else 'OFF',
                 'topic_mode': self._current_topic_mode,
                 'topic_mode_display': mode_display
             }
-        
-        def is_joint_torque_subscriber_enabled(self):
 
-            return self._joint_torque_subscriber_enabled and len(self._joint_torque_subscriber) > 0
-        
-
-    return ALLEXRos2Node(joint_callback=joint_callback, joint_torque_callback=joint_torque_callback)
+    return ALLEXRos2Node(joint_callback=joint_callback)
