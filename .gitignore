@@ -26,5 +26,5 @@ Thumbs.db
 *.temp
 *.bak
 
-# Large file (폴더에서 삭제했어도, 나중에 다시 넣을 때 실수로 커밋 방지)
-asset/ALLEX/ALLEX_Param_text_sim_only.txt
+# 참고용 문서 (다른 프로젝트 RTool 등, 저장소에 올리지 않음)
+irim_lab_python/DDVC_참고용/
