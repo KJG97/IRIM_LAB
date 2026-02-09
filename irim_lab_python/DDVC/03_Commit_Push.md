@@ -46,58 +46,9 @@
 
 ---
 
-## 4. 실전 예시 (로보틱스·IRIM_LAB 맥락)
+## 4. 에이전트가 커밋 + push까지 완전히 수행하도록 하는 지침
 
-**[사례 1: 새로운 기능 추가]**
-
-```text
-feat(control): implement system-2 reasoning for habilis
-
-- CLIP-RT 기반의 대조 학습 로직 추가
-- 실시간 제어를 위한 163Hz 추론 파이프라인 최적화
-```
-
-**[사례 2: 설계 문서 기반 수정 (DDVC)]**
-
-```text
-docs(spec): sync hand-arm kinematics with latest design
-
-- kinematics_model.md의 관절 한계값 수정에 따른 업데이트
-- 실제 로봇의 20자유도 사양 반영
-```
-
-**[사례 3: 버그 수정]**
-
-```text
-fix(env): solve contact reporting error in Isaac Lab
-
-- PhysX 엔진의 컨택 포인트 계산 누락 현상 수정
-```
-
-**[사례 4: IRIM_LAB 확장]**
-
-```text
-feat(irim_lab): add Sim2Sim window and Sensor Lab menu
-
-- extension.py에 Sim2Sim/Sensor Lab 창 토글 등록
-- PRD 1차 목표(sim2sim_console 통합) 문서 반영
-```
-
----
-
-## 5. Cursor AI로 커밋 메시지 자동 작성
-
-Cursor를 사용 중이라면 커밋 메시지를 직접 쓰지 말고, 아래처럼 요청한다.
-
-- **명령 예시:**  
-  "현재 변경 사항을 **Conventional Commits** 양식에 맞춰서 커밋 메시지로 작성해 줘. `DDVC/03_Commit_Convention.md` 규칙을 따르고, 수정된 PRD·문서를 참조했으면 `docs` 타입을 써 줘."
-- **이점:** AI가 변경 이력을 보고 `feat`, `fix`, `docs` 등을 구분해 준다.
-
----
-
-## 6. 에이전트가 커밋까지 직접 수행하도록 하는 지침
-
-사용자가 **"커밋 메시지 작성 + 커밋까지 실행해 줘"**라고 요청하면, 에이전트는 아래 순서로 수행한다.
+사용자가 **"커밋 메시지 작성 + 커밋까지 실행해 줘"** 또는 **"커밋 + push까지 해 줘"**라고 요청하면, 에이전트는 아래 순서로 **커밋 후 push까지** 완료한다.
 
 1. **변경 사항 확인**  
    - `git status`, `git diff --stat` 등으로 변경·삭제·추가된 파일을 파악한다.
@@ -114,15 +65,21 @@ Cursor를 사용 중이라면 커밋 메시지를 직접 쓰지 말고, 아래�
    - `git commit -m "<제목>" -m "<본문>"` 형태로, 작성한 메시지를 그대로 넣어 커밋한다.  
    - 본문이 여러 줄이면 `-m "첫 줄" -m "둘째 줄"` 처럼 `-m`을 반복하거나, 임시 파일에 메시지를 쓴 뒤 `git commit -F <파일>`을 쓴다.
 
-5. **결과 확인**  
-   - `git log -1 --oneline` 또는 `git show --stat`으로 방금 만든 커밋이 의도대로 들어갔는지 한 줄 요약해 사용자에게 알린다.
+5. **커밋 결과 확인**  
+   - `git log -1 --oneline` 또는 `git show --stat`으로 방금 만든 커밋이 의도대로 들어갔는지 확인한다.
+
+6. **push 실행**  
+   - `git remote -v`로 원격(보통 `origin`) 존재 여부를 확인한다.  
+   - 현재 브랜치가 추적 중이면 `git push`, 아니면 `git push -u origin <현재브랜치>`를 실행한다.  
+   - push 실패 시(예: 원격이 앞서 있을 때): 에러 메시지를 사용자에게 전달하고, `git pull --rebase` 또는 `git pull` 후 다시 `git push`할지 안내한다. 인증 실패(토큰/SSH)는 사용자에게 해결을 요청한다.  
+   - push 성공 시: `git log -1 --oneline`과 함께 **"커밋 및 push 완료"**라고 한 줄 요약해 사용자에게 알린다.
 
 **사용자 요청 예시**  
-- "지금 변경 사항을 DDVC/03_Commit_Convention.md 규칙으로 커밋 메시지 작성해 줘. **그 메시지로 커밋까지 실행해 줘.**"  
-- "제안한 커밋 메시지로 **자동으로 커밋까지** 에이전트가 직접 하도록 … **너도 직접 커밋까지 마무리해 줘.**"
+- "지금 변경 사항을 DDVC/03_Commit_Convention.md 규칙으로 커밋 메시지 작성해 줘. **그 메시지로 커밋하고 push까지 실행해 줘.**"  
+- "**커밋 + git push까지** 에이전트가 완전히 완료하도록 해 줘."
 
 ---
 
-## 7. 팀 협업 시
+## 5. 팀 협업 시
 
 연구실(Lab) 단위 협업이라면 **커밋 타입 목록만이라도 팀 내에서 통일**하면, 나중에 특정 실험·버그 수정 이력을 추적할 때 속도가 빨라진다.
