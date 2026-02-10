@@ -245,9 +245,8 @@ class JointTorqueTest:
             # Articulation 생성
             try:
                 self._articulation = SingleArticulation(prim_path=self.ARTICULATION_PATH)
-                print(f"✅ Articulation 생성 완료: {self.ARTICULATION_PATH}")
             except Exception as e:
-                print(f"⚠️ Articulation 생성 실패: {e}")
+                print(f"❌ Articulation 생성 실패: {e}")
                 return False
             
             # Articulation 초기화 (물리 시뮬레이션 시작 후 호출되어야 함)
@@ -255,9 +254,7 @@ class JointTorqueTest:
             try:
                 self._articulation.initialize()
                 self._initialized = True
-                print("✅ Articulation 초기화 완료")
-            except Exception as e:
-                print(f"⚠️ Articulation 초기화 실패 (나중에 재시도): {e}")
+            except Exception:
                 self._initialized = False
             
             # 각 관절의 DOF 인덱스 찾기 및 시각화 프림 초기화
@@ -269,13 +266,9 @@ class JointTorqueTest:
                         
                         # 시각화 프림 초기화 시도
                         self._try_initialize_viz_prim(joint_name)
-                        
-                        print(f"✅ 관절 DOF 인덱스 찾기 완료: {joint_name} -> {dof_index}")
                     except Exception as e:
-                        print(f"⚠️ 관절 DOF 인덱스 찾기 실패 ({joint_name}): {e}")
+                        print(f"❌ 관절 DOF 인덱스 찾기 실패 ({joint_name}): {e}")
                         return False
-            
-            print(f"✅ 관절 토크 테스트 초기화 완료 ({len(self._joint_indices)}개 관절)")
             
             # 센서 데이터 윈도우 초기화
             self._initialize_sensor_window()
@@ -283,7 +276,7 @@ class JointTorqueTest:
             return True
             
         except Exception as e:
-            print(f"❌ 관절 토크 테스트 초기화 실패: {e}")
+            print(f"❌ Joint Torque Test 초기화 실패: {e}")
             return False
     
     def _initialize_sensor_window(self):
@@ -429,10 +422,8 @@ class JointTorqueTest:
                     ui.Spacer(height=8)
             
             self._sensor_window_initialized = True
-            print("✅ 센서 데이터 윈도우 초기화 완료")
-            
-        except Exception as e:
-            print(f"⚠️ 센서 데이터 윈도우 초기화 실패: {e}")
+        except Exception:
+            pass
     
     def _destroy_sensor_window(self):
         """센서 데이터 윈도우 제거"""
@@ -480,7 +471,6 @@ class JointTorqueTest:
     def start(self):
         """토크 테스트 시작"""
         if not self._articulation:
-            print("⚠️ Articulation이 초기화되지 않았습니다. initialize()를 먼저 호출하세요.")
             return
         
         # Articulation이 아직 초기화되지 않았다면 시도
@@ -488,23 +478,16 @@ class JointTorqueTest:
             try:
                 self._articulation.initialize()
                 self._initialized = True
-                print("✅ Articulation 초기화 완료 (지연 초기화)")
-                
-                # DOF 인덱스 찾기 및 시각화 프림 초기화
                 if not self._joint_indices:
                     for joint_name in self.JOINT_NAMES:
                         try:
                             dof_index = self._articulation.get_dof_index(joint_name)
                             self._joint_indices[joint_name] = dof_index
-                            
-                            # 시각화 프림 초기화 시도
                             self._try_initialize_viz_prim(joint_name)
-                            
-                            print(f"✅ 관절 DOF 인덱스 찾기 완료: {joint_name} -> {dof_index}")
                         except Exception as e:
-                            print(f"⚠️ 관절 DOF 인덱스 찾기 실패 ({joint_name}): {e}")
+                            print(f"❌ 관절 DOF 인덱스 찾기 실패 ({joint_name}): {e}")
             except Exception as e:
-                print(f"⚠️ Articulation 초기화 실패: {e}")
+                print(f"❌ Articulation 초기화 실패: {e}")
                 return
         
         self._is_active = True
@@ -516,15 +499,10 @@ class JointTorqueTest:
         # Contact Sensor 인터페이스 초기화
         try:
             self._contact_sensor_interface = _sensor.acquire_contact_sensor_interface()
-            print(f"✅ Contact Sensor 인터페이스 초기화 완료")
-            
-            # Contact Force baseline 캡처
             self._capture_contact_force_baseline()
         except Exception as e:
-            print(f"⚠️ Contact Sensor 인터페이스 초기화 실패: {e}")
+            print(f"❌ Contact Sensor 인터페이스 초기화 실패: {e}")
             self._contact_sensor_interface = None
-        
-        print("🔄 관절 토크 테스트 시작")
     
     def _capture_force_baseline(self):
         """현재 Fingertip Force를 Baseline으로 캡처"""
@@ -560,15 +538,11 @@ class JointTorqueTest:
                 raw_force = self.compute_fingertip_force(joint_torques, joint_angles)
                 self._force_baseline = self._swap_fx_fz(raw_force)
                 self._force_baseline_magnitude = np.linalg.norm(self._force_baseline)
-                print(f"✅ Force Baseline 설정: Fx={self._force_baseline[0]:.4f}, "
-                      f"Fy={self._force_baseline[1]:.4f}, Fz={self._force_baseline[2]:.4f}, "
-                      f"|F|={self._force_baseline_magnitude:.4f} N")
             else:
                 self._force_baseline = np.zeros(3)
                 self._force_baseline_magnitude = 0.0
                 
-        except Exception as e:
-            print(f"⚠️ Force Baseline 캡처 실패: {e}")
+        except Exception:
             self._force_baseline = np.zeros(3)
             self._force_baseline_magnitude = 0.0
     
@@ -587,20 +561,11 @@ class JointTorqueTest:
                 self._torque_baseline = {}
                 return
             
-            # 각 관절의 baseline 토크값 저장
             self._torque_baseline = {}
-            baseline_str = []
             for i, joint_name in enumerate(self.JOINT_NAMES):
                 if i < len(efforts):
                     self._torque_baseline[joint_name] = float(efforts[i])
-                    # 짧은 이름으로 로그 출력
-                    short_name = joint_name.replace("R_Index_", "").replace("_Joint", "")
-                    baseline_str.append(f"{short_name}={efforts[i]:.5f}")
-            
-            print(f"✅ Torque Baseline 설정: {', '.join(baseline_str)} Nm")
-                
-        except Exception as e:
-            print(f"⚠️ Torque Baseline 캡처 실패: {e}")
+        except Exception:
             self._torque_baseline = {}
     
     def _capture_contact_force_baseline(self):
@@ -639,20 +604,14 @@ class JointTorqueTest:
                     pass
                 
                 self._contact_force_baseline = total_impulse / dt
-                print(f"✅ Contact Force Baseline 설정: Fx={self._contact_force_baseline[0]:.4f}, "
-                      f"Fy={self._contact_force_baseline[1]:.4f}, Fz={self._contact_force_baseline[2]:.4f} N")
             else:
                 self._contact_force_baseline = np.zeros(3)
-                print("✅ Contact Force Baseline 설정: 0.0, 0.0, 0.0 N (접촉 없음)")
-                
-        except Exception as e:
-            print(f"⚠️ Contact Force Baseline 캡처 실패: {e}")
+        except Exception:
             self._contact_force_baseline = np.zeros(3)
     
     def stop(self):
         """토크 테스트 중지"""
         self._is_active = False
-        print("⏸️ 관절 토크 테스트 중지")
     
     # ============================================================
     # Forward Kinematics & Jacobian 계산
@@ -808,8 +767,7 @@ class JointTorqueTest:
             
             return force
             
-        except Exception as e:
-            print(f"⚠️ Fingertip force 계산 실패: {e}")
+        except Exception:
             return np.zeros(3)
 
     def _swap_fx_fz(self, force: np.ndarray) -> np.ndarray:
@@ -864,14 +822,9 @@ class JointTorqueTest:
             self._force_viz_prim = xformable
             
             self._ensure_orient_then_scale_order(self._force_viz_prim)
-
-            # 초기 scale을 0으로 설정
             self._set_scale_xyz(xformable, 0.0, 0.0, 0.0)
-            
-            print(f"✅ Force 시각화 프림 초기화 완료: {self.FORCE_VIZ_PATH}")
             return True
-        except Exception as e:
-            print(f"⚠️ Force 시각화 프림 초기화 실패: {e}")
+        except Exception:
             return False
     
     def _set_scale_xyz(self, xformable: "UsdGeom.Xformable", sx: float, sy: float, sz: float):
@@ -891,8 +844,8 @@ class JointTorqueTest:
                 scale_op.Set(Gf.Vec3d(sx, sy, sz))
             except Exception:
                 scale_op.Set(Gf.Vec3f(sx, sy, sz))
-        except Exception as e:
-            print(f"⚠️ scale xyz 설정 실패: {e}")
+        except Exception:
+            pass
     
     def _update_force_visualization(self, force: np.ndarray):
         """Force 벡터 시각화 업데이트 (월드 좌표계 기준, prim orientation은 Isaac Sim에서 설정)
@@ -935,9 +888,8 @@ class JointTorqueTest:
             direction = np.array([delta_world[0], delta_world[1],- delta_world[2]])
             quat = vector_to_quaternion(direction)
             self._set_orientation(self._force_viz_prim, quat)
-
-        except Exception as e:
-            print(f"⚠️ Force 시각화 업데이트 실패: {e}")
+        except Exception:
+            pass
     
     def _update_contact_force_display(self):
         """Contact Sensor Force를 UI에 업데이트 (스칼라 + 3축 벡터)"""
@@ -1054,12 +1006,9 @@ class JointTorqueTest:
                 return False
             
             self._viz_prims[joint_name] = xformable
-            
-            # 초기 scale을 0으로 설정
             self._set_scale(xformable, 0.0)
             return True
-        except Exception as e:
-            print(f"⚠️ viz_prim 초기화 예외 ({joint_name}): {e}")
+        except Exception:
             return False
     
     def _set_scale(self, xformable: "UsdGeom.Xformable", scale: float):
@@ -1076,8 +1025,8 @@ class JointTorqueTest:
                 scale_op = xformable.AddScaleOp()
             
             scale_op.Set(Gf.Vec3f(scale, scale, scale))
-        except Exception as e:
-            print(f"⚠️ scale 설정 실패: {e}")
+        except Exception:
+            pass
     
     def _set_orientation(self, xformable: "UsdGeom.Xformable", quat: np.ndarray):
         """USD prim의 orientation 설정 (quaternion: [w, x, y, z])"""
@@ -1094,8 +1043,8 @@ class JointTorqueTest:
             
             # Gf.Quatd(w, x, y, z) - double precision 사용
             orient_op.Set(Gf.Quatd(float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])))
-        except Exception as e:
-            print(f"⚠️ orientation 설정 실패: {e}")
+        except Exception:
+            pass
     
     def update(self):
         """토크값을 읽고 시각화 프림의 scale과 orientation 업데이트"""
@@ -1212,7 +1161,7 @@ class JointTorqueTest:
             self._update_contact_force_display()
                     
         except Exception as e:
-            print(f"토크 테스트 업데이트 실패: {e}")
+            print(f"❌ 토크 테스트 업데이트 실패: {e}")
     
     def cleanup(self):
         """리소스 정리"""
@@ -1225,8 +1174,8 @@ class JointTorqueTest:
         for joint_name, viz_prim in self._viz_prims.items():
             try:
                 self._set_scale(viz_prim, 0.0)
-            except Exception as e:
-                print(f"⚠️ Cleanup scale 리셋 실패 ({joint_name}): {e}")
+            except Exception:
+                pass
         
         # Force 시각화 프림 정리
         if self._force_viz_prim is not None:
@@ -1246,7 +1195,6 @@ class JointTorqueTest:
         self._joint_indices.clear()
         self._viz_prims.clear()
         self._initialized = False
-        print("🧹 관절 토크 테스트 리소스 정리 완료")
     
     @property
     def is_active(self) -> bool:
