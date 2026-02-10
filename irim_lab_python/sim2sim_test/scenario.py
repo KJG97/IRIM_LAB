@@ -59,6 +59,8 @@ class ALLEXDigitalTwin:
         self._obs_joint_indices = None
         self._right_hand_torque_dof_indices = None
         self._policy_action_dof_indices = None
+        # Sim2Sim 디버거용: physics 콜백에서만 채움, 디버거는 이 캐시만 참조 (physics step 중 직접 읽기 방지)
+        self._sim2sim_obs_cache = {}
         # 관절 제어 상태 (기존 ALLEXJointController 흡수)
         self._coupled_joints: Dict[int, Dict[str, Any]] = {}
         self._ros2_subscriber_active = False
@@ -192,12 +194,14 @@ class ALLEXDigitalTwin:
             return True
 
     def _publish_joint_observation_if_needed(self, step: float) -> None:
-        """ROS2 Publisher 활성 시 관절 관측, 오른손 토크, Right_Hand_base pose 발행."""
-        ros2_manager = getattr(self, "_ros2_manager", None)
-        if not ros2_manager or not ros2_manager.is_initialized() or not ros2_manager.is_publisher_enabled():
-            return
+        """관절 관측·토크·손 pose 수집(Sim2Sim 캐시 채움). ROS2 Publisher 활성 시에만 발행."""
         if self._articulation is None:
             return
+        view = getattr(self._articulation, "_articulation_view", None)
+        if view is None or not view.is_physics_handle_valid():
+            return
+        ros2_manager = getattr(self, "_ros2_manager", None)
+        do_publish = bool(ros2_manager and ros2_manager.is_initialized() and ros2_manager.is_publisher_enabled())
         try:
             if self._obs_joint_indices is None:
                 self._obs_joint_indices = resolve_dof_indices(
@@ -208,7 +212,10 @@ class ALLEXDigitalTwin:
             if self._obs_joint_indices:
                 with self._physx_lock:
                     positions = self._articulation.get_joint_positions(joint_indices=self._obs_joint_indices)
-                ros2_manager.publish_joint_observation(positions)
+                if positions is not None:
+                    self._sim2sim_obs_cache["joint_pos"] = np.asarray(positions, dtype=np.float32).reshape(-1)
+                if do_publish:
+                    ros2_manager.publish_joint_observation(positions)
 
             if self._right_hand_torque_dof_indices is None:
                 self._right_hand_torque_dof_indices = resolve_dof_indices(
@@ -223,7 +230,9 @@ class ALLEXDigitalTwin:
                             joint_indices=self._right_hand_torque_dof_indices
                         )
                     if torques is not None:
-                        ros2_manager.publish_right_hand_joint_torque([float(v) for v in torques])
+                        self._sim2sim_obs_cache["right_hand_joint_torque"] = np.asarray(torques, dtype=np.float32).reshape(-1)
+                        if do_publish:
+                            ros2_manager.publish_right_hand_joint_torque([float(v) for v in torques])
                 except Exception:
                     pass
 
@@ -238,7 +247,9 @@ class ALLEXDigitalTwin:
                 rel_pos = quat_apply(origin_quat_conj, right_pos_w - origin_pos_w)
                 rel_quat = quat_mul(origin_quat_conj, right_quat_w)
                 pose_7d = np.concatenate([rel_pos, rel_quat], axis=-1)
-                ros2_manager.publish_right_hand_base_pos(pose_7d)
+                self._sim2sim_obs_cache["right_hand_base_pos"] = np.asarray(pose_7d, dtype=np.float32)
+                if do_publish:
+                    ros2_manager.publish_right_hand_base_pos(pose_7d)
             except Exception:
                 pass
         except Exception:
