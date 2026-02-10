@@ -39,27 +39,27 @@
 
 ---
 
-## 5) Sim2Real Debugger GUI — PySide6 설치 (Isaac Sim)
+## 5) Sim2Real Debugger GUI — 의존성 설치 (Isaac Sim)
 
-Sim2Real Debugger GUI는 **PySide6**를 사용합니다. Isaac Sim 번들 Python에는 기본적으로 PySide6가 없으므로, **Isaac Sim이 사용하는 Python**으로 아래처럼 한 번 설치해야 합니다.
+Sim2Real Debugger GUI는 **PySide6**와 **pyqtgraph**를 사용합니다. Isaac Sim 번들 Python에는 기본적으로 없으므로, **Isaac Sim이 사용하는 Python**으로 아래처럼 한 번 설치합니다.
 
 **Isaac Sim이 설치된 경로의 `kit/python/bin`** 아래 Python으로 pip를 실행하면 됩니다.
 
 ```bash
 # 이 프로젝트(workspace) 기준 — kit/python/bin 에 python3, python3.11 있음
-/home/jkkim/isaac-sim/kit/python/bin/python3 -m pip install PySide6
+/home/jkkim/isaac-sim/kit/python/bin/python3 -m pip install PySide6 pyqtgraph
 ```
 
 다른 설치 형태 예시:
 
 ```bash
 # 일반적인 경우: 경로만 본인 Isaac Sim 설치 경로로 바꿔서 사용
-<ISAAC_SIM_ROOT>/kit/python/bin/python3 -m pip install PySide6
+<ISAAC_SIM_ROOT>/kit/python/bin/python3 -m pip install PySide6 pyqtgraph
 ```
 
 ```bash
 # NVIDIA 런처로 설치한 경우 (python.sh 사용)
-~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh -m pip install PySide6
+~/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh -m pip install PySide6 pyqtgraph
 ```
 
 설치 후 Isaac Sim을 다시 띄우고, sim2sim_test UI의 **Sim2sim Deploy → Open Sim2Real Debugger** 버튼으로 디버거 창을 열 수 있습니다.

@@ -42,6 +42,12 @@ PLOT_COLOR_MAP: Dict[str, str] = {
 PLOT_COLOR_DEFAULT = "#AAAAAA"
 PLOT_CURVE_WIDTH = 4
 
+# -----------------------------------------------------------------------------
+# Deploy 모드 (Sim2Real = ROS2, Sim2Sim = Isaac Sim API)
+# -----------------------------------------------------------------------------
+DEPLOY_MODE_SIM2REAL = "sim2real"
+DEPLOY_MODE_SIM2SIM = "sim2sim"
+
 
 @dataclass
 class DebuggerConfig:
