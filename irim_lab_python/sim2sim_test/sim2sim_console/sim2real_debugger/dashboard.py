@@ -56,11 +56,13 @@ class Sim2RealDebugger(QMainWindow):
         cfg: Optional[DebuggerConfig] = None,
         deploy_mode: str = DEPLOY_MODE_SIM2REAL,
         physics_dt_provider: Optional[Callable[[], float]] = None,
+        policy_action_applier: Optional[Callable[[np.ndarray], None]] = None,
     ):
         super().__init__()
         self.cfg = cfg or DebuggerConfig()
         self.deploy_mode = deploy_mode if deploy_mode in (DEPLOY_MODE_SIM2REAL, DEPLOY_MODE_SIM2SIM) else DEPLOY_MODE_SIM2REAL
         self._sim2sim_mode = self.deploy_mode == DEPLOY_MODE_SIM2SIM
+        self.policy_action_applier = policy_action_applier
 
         title_suffix = " (Sim2Sim)" if self._sim2sim_mode else " (Sim2Real / ROS2)"
         self.setWindowTitle(WINDOW_TITLE + title_suffix)
@@ -667,6 +669,11 @@ class Sim2RealDebugger(QMainWindow):
     # ROS publish callbacks used by inference engine
     # ----------------------------------------------------------------------------------
     def _publish_policy_action(self, actions: np.ndarray) -> None:
+        if self._sim2sim_mode and self.policy_action_applier is not None:
+            try:
+                self.policy_action_applier(actions)
+            except Exception:
+                LOG.exception("policy_action_applier (Sim2Sim) failed")
         if ROS2_AVAILABLE and self.ros_running and self.ros_node is not None:
             try:
                 self.ros_node.publish_policy_action(actions)

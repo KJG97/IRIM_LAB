@@ -225,11 +225,13 @@ class UIBuilder:
             from .sim2sim_console.sim2real_debugger_gui import show_debugger
             obs_provider = None
             physics_dt_provider = None
+            policy_action_applier = None
             if mode == self._DEPLOY_MODE_SIM2SIM:
                 from .sim2sim_obs import make_sim2sim_obs_provider
                 obs_provider = make_sim2sim_obs_provider(lambda: self._scenario)
                 physics_dt_provider = self._get_sim2sim_physics_dt
-            show_debugger(mode=mode, obs_provider=obs_provider, physics_dt_provider=physics_dt_provider)
+                policy_action_applier = self._apply_sim2sim_policy_action
+            show_debugger(mode=mode, obs_provider=obs_provider, physics_dt_provider=physics_dt_provider, policy_action_applier=policy_action_applier)
         except Exception as e:
             import traceback
             print(f"Sim2Real Debugger GUI 실행 실패: {e}")
@@ -249,6 +251,17 @@ class UIBuilder:
         except Exception:
             pass
         return 1.0 / float(SimulationConfig.SIMULATION_HZ)
+
+    def _apply_sim2sim_policy_action(self, actions) -> None:
+        """Sim2Sim: 디버거에서 나온 policy action을 시나리오에 전달해 다음 update()에서 articulation에 적용."""
+        scenario = getattr(self, "_scenario", None)
+        if scenario is None or not hasattr(scenario, "apply_policy_action"):
+            return
+        try:
+            joint_list = actions.tolist() if hasattr(actions, "tolist") else list(actions)
+            scenario.apply_policy_action(joint_list)
+        except Exception:
+            pass
 
     # ----- 오버레이 윈도우 (관절/손 텍스트) — scenario가 self를 overlay_ui로 사용 -----
     _OVERLAY_LABEL_STYLE = {"color": UIColors.TEXT_PRIMARY, "font_size": OverlayConfig.FONT_SIZE, "margin": OverlayConfig.LABEL_MARGIN, "word_wrap": False}

@@ -16,9 +16,9 @@ logging.basicConfig(
 )
 
 
-def show_debugger(mode: str = "sim2real", obs_provider=None, physics_dt_provider=None) -> None:
+def show_debugger(mode: str = "sim2real", obs_provider=None, physics_dt_provider=None, policy_action_applier=None) -> None:
     """Isaac Sim 등 기존 앱 내부에서 디버거 창만 띄울 때 사용. app.exec()/sys.exit 호출 없음.
-    Sim2Sim 모드에서 obs_provider로 관측 채움, physics_dt_provider로 입력 주기(Hz/ms) 표시."""
+    Sim2Sim 모드에서 obs_provider로 관측 채움, physics_dt_provider로 입력 주기, policy_action_applier로 액션 적용."""
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
@@ -26,6 +26,7 @@ def show_debugger(mode: str = "sim2real", obs_provider=None, physics_dt_provider
         obs_provider=obs_provider,
         deploy_mode=mode,
         physics_dt_provider=physics_dt_provider,
+        policy_action_applier=policy_action_applier,
     )
     window.show()
 
