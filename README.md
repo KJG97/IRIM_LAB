@@ -9,7 +9,7 @@
 [![ROS2](https://img.shields.io/badge/ROS2-Optional-22314E?style=for-the-badge&logo=ros&logoColor=white)](https://www.ros.org/)
 
 <p align="center">
-  <img src="data/preview.png" alt="IRIM_LAB Preview" width="600"/>
+  <img src="data/allex_isaacsim.png" alt="IRIM_LAB Preview" width="600"/>
 </p>
 
 [Overview](#-overview) •
@@ -135,7 +135,7 @@ git clone <repository_url> IRIM_LAB
 │  ┌─────────────────┐  ┌─────────────────┐  ┌───────────────────┐ │
 │  │    Sim2Sim      │  │ Sim2Real        │  │    Sensor Lab     │ │
 │  │ (Digital Twin)  │  │ Debugger        │  │                   │ │
-│  │                 │  │ (sim2sim_console)│  │  에셋·토크 테스트  │ │
+│  │                 │  │(sim2sim_console)│  │  에셋·토크 테스트   │ │
 │  │ LOAD/RUN/ROS2   │  │ Policy·Traj·ROS2│  │                   │ │
 │  └─────────────────┘  └─────────────────┘  └───────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
