@@ -183,10 +183,30 @@ class UIBuilder:
                 self._joint_group_checkboxes[checkbox_text].model.set_value(current_state)
 
     # ----- Sim2sim Deploy -----
+    _DEPLOY_MODE_SIM2REAL = "sim2real"
+    _DEPLOY_MODE_SIM2SIM = "sim2sim"
+
     def _build_sim2sim_deploy(self):
         sim2sim_frame = CollapsableFrame("Sim2sim Deploy", collapsed=UIConfig.JOINT_CONTROL_COLLAPSED)
         with sim2sim_frame:
             with ui.VStack(style=get_style(), spacing=UILayout.SPACING_SMALL, height=0):
+                with ui.HStack(height=UILayout.LABEL_HEIGHT):
+                    create_status_label("Mode:", width=UILayout.LABEL_WIDTH_MEDIUM)
+                    self._deploy_mode_label = create_status_label("Sim2Real (ROS2)", width=UILayout.LABEL_WIDTH_LARGE)
+                self._deploy_mode = self._DEPLOY_MODE_SIM2REAL
+                with ui.HStack(height=UILayout.BUTTON_HEIGHT):
+                    create_styled_button(
+                        "Sim2Real",
+                        callback=lambda: self._set_deploy_mode(self._DEPLOY_MODE_SIM2REAL),
+                        color_scheme="blue",
+                        height=UILayout.BUTTON_HEIGHT,
+                    )
+                    create_styled_button(
+                        "Sim2Sim",
+                        callback=lambda: self._set_deploy_mode(self._DEPLOY_MODE_SIM2SIM),
+                        color_scheme="green",
+                        height=UILayout.BUTTON_HEIGHT,
+                    )
                 create_styled_button(
                     "Open Sim2Real Debugger",
                     callback=self._on_open_sim2real_debugger,
@@ -194,14 +214,41 @@ class UIBuilder:
                     height=UILayout.BUTTON_HEIGHT,
                 )
 
+    def _set_deploy_mode(self, mode: str):
+        self._deploy_mode = mode
+        if hasattr(self, "_deploy_mode_label") and self._deploy_mode_label is not None:
+            self._deploy_mode_label.text = "Sim2Real (ROS2)" if mode == self._DEPLOY_MODE_SIM2REAL else "Sim2Sim (Isaac Sim)"
+
     def _on_open_sim2real_debugger(self):
+        mode = getattr(self, "_deploy_mode", self._DEPLOY_MODE_SIM2REAL)
         try:
             from .sim2sim_console.sim2real_debugger_gui import show_debugger
-            show_debugger()
+            obs_provider = None
+            physics_dt_provider = None
+            if mode == self._DEPLOY_MODE_SIM2SIM:
+                from .sim2sim_obs import make_sim2sim_obs_provider
+                obs_provider = make_sim2sim_obs_provider(lambda: self._scenario)
+                physics_dt_provider = self._get_sim2sim_physics_dt
+            show_debugger(mode=mode, obs_provider=obs_provider, physics_dt_provider=physics_dt_provider)
         except Exception as e:
             import traceback
             print(f"Sim2Real Debugger GUI 실행 실패: {e}")
             traceback.print_exc()
+
+    def _get_sim2sim_physics_dt(self) -> float:
+        """Isaac Sim 현재 physics_dt 반환 (Sim2Sim 입력 주기 표시용). 메인 스레드에서 호출."""
+        try:
+            world = World.instance()
+            if world is not None:
+                return float(world.get_physics_context().get_physics_dt())
+        except Exception:
+            pass
+        try:
+            from isaacsim.core.simulation_manager import SimulationManager
+            return float(SimulationManager.get_physics_dt())
+        except Exception:
+            pass
+        return 1.0 / float(SimulationConfig.SIMULATION_HZ)
 
     # ----- 오버레이 윈도우 (관절/손 텍스트) — scenario가 self를 overlay_ui로 사용 -----
     _OVERLAY_LABEL_STYLE = {"color": UIColors.TEXT_PRIMARY, "font_size": OverlayConfig.FONT_SIZE, "margin": OverlayConfig.LABEL_MARGIN, "word_wrap": False}
@@ -381,6 +428,7 @@ class UIBuilder:
         "_load_btn", "_reset_btn", "_scenario_state_btn",
         "_pub_status_label", "_sub_status_label", "_topic_mode_status_label",
         "_joint_group_checkboxes",
+        "_deploy_mode_label",
     )
 
     def cleanup(self):

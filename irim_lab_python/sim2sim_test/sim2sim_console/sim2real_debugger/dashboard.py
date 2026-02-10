@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import logging
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
 
 from .config import (
     DebuggerConfig,
+    DEPLOY_MODE_SIM2REAL,
+    DEPLOY_MODE_SIM2SIM,
     EXPECTED_TOTAL_OBS_DIM,
     OBS_SPECS,
     OBS_TIMEOUT_SEC,
@@ -48,11 +50,20 @@ LOG = logging.getLogger(__name__)
 
 
 class Sim2RealDebugger(QMainWindow):
-    def __init__(self, obs_provider: Optional[ObsProvider] = None, cfg: Optional[DebuggerConfig] = None):
+    def __init__(
+        self,
+        obs_provider: Optional[ObsProvider] = None,
+        cfg: Optional[DebuggerConfig] = None,
+        deploy_mode: str = DEPLOY_MODE_SIM2REAL,
+        physics_dt_provider: Optional[Callable[[], float]] = None,
+    ):
         super().__init__()
         self.cfg = cfg or DebuggerConfig()
+        self.deploy_mode = deploy_mode if deploy_mode in (DEPLOY_MODE_SIM2REAL, DEPLOY_MODE_SIM2SIM) else DEPLOY_MODE_SIM2REAL
+        self._sim2sim_mode = self.deploy_mode == DEPLOY_MODE_SIM2SIM
 
-        self.setWindowTitle(WINDOW_TITLE)
+        title_suffix = " (Sim2Sim)" if self._sim2sim_mode else " (Sim2Real / ROS2)"
+        self.setWindowTitle(WINDOW_TITLE + title_suffix)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
@@ -62,10 +73,15 @@ class Sim2RealDebugger(QMainWindow):
         self.policy = PolicyWrapper()
         self.infer = InferenceEngine(self.cfg, self.policy)
 
-        # ROS2 state
+        # ROS2 state (Sim2Sim 모드에서는 사용하지 않음)
         self.ros_node: Optional["ROS2ObservationSubscriber"] = None
         self.ros_thread: Optional[threading.Thread] = None
         self.ros_running = False
+
+        # Sim2Sim: Isaac Sim physics_dt로 입력 주기 표시 (UI 스레드에서 갱신, control 스레드에서 참조)
+        self.physics_dt_provider = physics_dt_provider
+        self._sim2sim_physics_dt: float = 0.0
+        self._sim2sim_physics_dt_lock = threading.Lock()
 
         # external obs provider (optional)
         self.external_provider = obs_provider
@@ -140,7 +156,10 @@ class Sim2RealDebugger(QMainWindow):
         self.drop_zone.files_dropped.connect(self._on_files_dropped)
         left_layout.addWidget(self.drop_zone)
 
-        left_layout.addWidget(self._build_ros_group())
+        if self._sim2sim_mode:
+            left_layout.addWidget(self._build_sim2sim_mode_group())
+        else:
+            left_layout.addWidget(self._build_ros_group())
         left_layout.addLayout(self._build_model_traj_status_row())
         left_layout.addLayout(self._build_unload_buttons())
         left_layout.addWidget(self._build_control_group())
@@ -171,6 +190,27 @@ class Sim2RealDebugger(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 10)
         splitter.setStretchFactor(1, 16)
+
+    def _build_sim2sim_mode_group(self) -> QGroupBox:
+        """Sim2Sim 모드일 때 표시: ROS2 비활성화, Isaac Sim physics_dt 기반 입력 주기."""
+        g = QGroupBox("Deploy Mode")
+        g.setMinimumHeight(56)
+        layout = QVBoxLayout(g)
+        layout.setContentsMargins(8, 4, 8, 4)
+        row1 = QHBoxLayout()
+        lbl = QLabel("Sim2Sim — ROS2 disabled. Obs/Action via Isaac Sim API.")
+        lbl.setStyleSheet("font-size: 11px; color: #88ff88;")
+        lbl.setWordWrap(True)
+        row1.addWidget(lbl)
+        layout.addLayout(row1)
+        row2 = QHBoxLayout()
+        self.lbl_sim2sim_input_period = QLabel("Input: — Hz (— ms)")
+        self.lbl_sim2sim_input_period.setStyleSheet("font-size: 11px; color: #aaffaa; font-family: monospace;")
+        row2.addWidget(self.lbl_sim2sim_input_period)
+        row2.addStretch()
+        layout.addLayout(row2)
+        g.setStyleSheet(STYLE_GROUP_BOX)
+        return g
 
     def _build_ros_group(self) -> QGroupBox:
         ros_group = QGroupBox("ROS2 Connection")
@@ -370,6 +410,9 @@ class Sim2RealDebugger(QMainWindow):
     def _make_obs_provider(self) -> ObsProvider:
         if self.external_provider is not None:
             return self.external_provider
+        if self._sim2sim_mode:
+            # Sim2Sim: external_provider가 주입되지 않았으면 빈 관측 (연동 시 obs_provider 전달)
+            return lambda: {}
         return lambda: self.store.snapshot() if self.ros_running else {}
 
     def _snapshot_raw(self) -> ObsDict:
@@ -701,9 +744,20 @@ class Sim2RealDebugger(QMainWindow):
         actions_active = self.loaded_trajectory is not None
         joint_pos_active = ("joint_pos" in data) and self._is_stream_fresh("joint_pos") and (np.asarray(data["joint_pos"]).size == self.cfg.num_joints)
 
+        # Sim2Sim: physics_dt_provider로 받은 주기로 스트리밍 obs Hz 설정 (Isaac Sim에서 physics_dt 변경 시 반영)
+        sim2sim_dt = 0.0
+        if self._sim2sim_mode and self.physics_dt_provider is not None:
+            with self._sim2sim_physics_dt_lock:
+                sim2sim_dt = self._sim2sim_physics_dt
+
         with self._obs_rate_lock:
             for spec in OBS_SPECS:
                 if not self._spec_active(data, spec, joint_pos_active, actions_active):
+                    continue
+
+                # Sim2Sim + physics_dt 있음: 스트리밍 obs는 physics_dt 기반 Hz로 표시
+                if self._sim2sim_mode and sim2sim_dt > 0 and spec.streaming:
+                    self._obs_rate_hz[spec.name] = 1.0 / sim2sim_dt
                     continue
 
                 # 1) 스트리밍 obs: ROS 수신 주기로 계산 (실제 네트워크 입력 갱신 주기)
@@ -722,11 +776,9 @@ class Sim2RealDebugger(QMainWindow):
                             if dt > 0:
                                 self._obs_rate_hz[spec.name] = 1.0 / dt
                         self._obs_last_ros_ts[spec.name] = ros_ts
-                        # 스트리밍은 ROS 수신 시각 기반만 사용
                         continue
 
-                # 2) 비스트리밍 obs (hammer_pos/target_right_hand_pose 등) 또는 ROS 정보 없음:
-                #    실제 네트워크 입력 직전에 제어 루프에서 주입한 주기로 계산 (ZOH일 경우 control_hz)
+                # 2) 비스트리밍 obs: 제어 루프 주입 주기로 계산 (ZOH일 경우 control_hz)
                 last = self._obs_last_seen.get(spec.name)
                 if last is not None:
                     dt = now - last
@@ -754,6 +806,23 @@ class Sim2RealDebugger(QMainWindow):
 
     def update_loop(self) -> None:
         """UI/플롯 업데이트 루프 (30Hz 기본)."""
+        # Sim2Sim: Isaac Sim physics_dt 조회 (메인 스레드에서만 호출, 변경 시 입력 주기 자동 반영)
+        if self._sim2sim_mode and self.physics_dt_provider is not None and callable(self.physics_dt_provider):
+            try:
+                dt = float(self.physics_dt_provider())
+                if dt > 0:
+                    with self._sim2sim_physics_dt_lock:
+                        self._sim2sim_physics_dt = dt
+                    if hasattr(self, "lbl_sim2sim_input_period") and self.lbl_sim2sim_input_period is not None:
+                        hz = 1.0 / dt
+                        ms = dt * 1000.0
+                        self.lbl_sim2sim_input_period.setText(f"Input: {hz:.1f} Hz ({ms:.1f} ms)")
+            except Exception:
+                with self._sim2sim_physics_dt_lock:
+                    self._sim2sim_physics_dt = 0.0
+                if hasattr(self, "lbl_sim2sim_input_period") and self.lbl_sim2sim_input_period is not None:
+                    self.lbl_sim2sim_input_period.setText("Input: — Hz (— ms)")
+
         with self._last_data_lock:
             data = self._last_data if self._last_data is not None else self._normalized_data()
         self._update_obs_ui(data)
