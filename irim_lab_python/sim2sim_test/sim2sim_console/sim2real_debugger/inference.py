@@ -64,7 +64,6 @@ class InferenceEngine:
         self._is_resetting: bool = False
         self._reset_start_pose: Optional[np.ndarray] = None  # 리셋 시작 시점의 관절 위치
         self._reset_speed: float = 0.1  # 매 스텝마다 이동할 비율 (0.05 = 5%씩, 약 20 스텝에 완료)
-        self._debug_step_cnt: int = 0
 
     def set_trajectory(self, traj: Optional[dict]) -> None:
         self.trajectory = traj
@@ -107,7 +106,6 @@ class InferenceEngine:
         self._last_published_action = None  # inference 시작 시 초기화
         self._is_resetting = False  # inference 시작 시 리셋 상태 초기화
         self._reset_start_pose = None
-        self._debug_step_cnt = 0  # 디버그 출력 카운터 리셋
         # last_actions obs: 학습과 동일하게 18차원 관절 위치만 history (54차원)
         init_action_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
         self._action_history = [init_action_18.copy() for _ in range(self._history_length)]
@@ -408,29 +406,6 @@ class InferenceEngine:
         # 최종 명령 = ref + raw*residual_scale (먼저 계산 후 재사용)
         actions = (ref + raw_actions * self.residual_scale).astype(np.float32, copy=False)
         self._last_published_action = actions.copy()
-
-        # inference 실행 중일 때만 10스텝마다 출력
-        self._debug_step_cnt += 1
-        if self._debug_step_cnt % 10 == 1:
-            def _fmt(a: np.ndarray) -> str:
-                return " ".join(f"{x:+.4f}" for x in a)
-            lines = [
-                f"[infer] step={self._debug_step_cnt} speed={self.speed:.3f}",
-                f"  raw_policy(18): {_fmt(raw_actions)}",
-                f"  ref_traj  (18): {_fmt(ref)}",
-                f"  final_act (18): {_fmt(actions)}",
-            ]
-            if joint_pos is not None:
-                pos_err = actions - joint_pos
-                lines.append(f"  joint_pos (18): {_fmt(joint_pos)}")
-                lines.append(f"  pos_error (18): {_fmt(pos_err)}  (target-current, max={np.max(np.abs(pos_err)):.4f})")
-            else:
-                lines.append("  joint_pos: N/A")
-            torque = data.get("right_hand_joint_torque")
-            if torque is not None:
-                tarr = np.asarray(torque, dtype=np.float32).reshape(-1)
-                lines.append(f"  torque   ({tarr.size:2d}): {_fmt(tarr)}")
-            print("\n".join(lines))
 
         # 다음 스텝 obs용: 적용된 관절 위치 18차원 저장
         self._last_actions = actions.copy()
