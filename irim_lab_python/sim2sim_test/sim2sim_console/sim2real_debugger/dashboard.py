@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import logging
-from typing import Callable, Dict, Optional, List
+from typing import Dict, List, Optional
 
 import numpy as np
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
@@ -24,41 +24,36 @@ from PySide6.QtWidgets import (
 
 from .config import (
     DebuggerConfig,
-    OBS_SPECS,
     EXPECTED_TOTAL_OBS_DIM,
-    STREAMING_NAMES,
-    ALLEX_ACTION_JOINT_NAMES,
+    OBS_SPECS,
     OBS_TIMEOUT_SEC,
+    ObsDict,
+    ObsProvider,
+    STREAMING_NAMES,
+    STYLE_GROUP_BOX,
+    STYLE_STATUS_ERR,
+    STYLE_STATUS_IDLE,
+    STYLE_STATUS_OK,
+    WINDOW_HEIGHT,
+    WINDOW_TITLE,
+    WINDOW_WIDTH,
 )
-from .obs_store import ObservationStore
-from .obs_normalizer import ObsNormalizer
+from .inference import InferenceEngine, TrajectoryLoader
+from .observation import ObsNormalizer, ObservationStore
 from .policy import PolicyWrapper
-from .trajectory import TrajectoryLoader
-from .inference import InferenceEngine
-from .ros2_io import ROS2ObservationSubscriber, ROS2_AVAILABLE, spin_while
-from .types import ObsDict, ObsProvider
-from .ui.drop_zone import DropZone
-from .ui.plot_panel import PlotPanel
+from .ros2_io import ROS2_AVAILABLE, ROS2ObservationSubscriber, spin_while
+from .widgets import DropZone, PlotPanel
 
 LOG = logging.getLogger(__name__)
 
 
 class Sim2RealDebugger(QMainWindow):
-    _STYLE_BOX = (
-        "QGroupBox { font-weight: bold; border: 2px solid #555; border-radius: 5px; "
-        "margin-top: 10px; padding-top: 10px; } "
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }"
-    )
-    _STYLE_STATUS_OK = "background-color: #004400; color: #00ff00; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
-    _STYLE_STATUS_ERR = "background-color: #550000; color: #ffaaaa; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
-    _STYLE_STATUS_IDLE = "background-color: #444; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
-
     def __init__(self, obs_provider: Optional[ObsProvider] = None, cfg: Optional[DebuggerConfig] = None):
         super().__init__()
         self.cfg = cfg or DebuggerConfig()
 
-        self.setWindowTitle("Sim2Real Proprioception Debugger (PyQtGraph + DropZone)")
-        self.resize(1618, 1000)
+        self.setWindowTitle(WINDOW_TITLE)
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
         # core components
@@ -124,30 +119,6 @@ class Sim2RealDebugger(QMainWindow):
             return float(text) if text else default
         except ValueError:
             return default
-
-    @staticmethod
-    def _xyz_row(x: QLineEdit, y: QLineEdit, z: QLineEdit, prefix: str = "") -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(f"{prefix + ' ' if prefix else ''}X:"))
-        row.addWidget(x)
-        row.addWidget(QLabel("Y:"))
-        row.addWidget(y)
-        row.addWidget(QLabel("Z:"))
-        row.addWidget(z)
-        return row
-
-    @staticmethod
-    def _quat_row(qw: QLineEdit, qx: QLineEdit, qy: QLineEdit, qz: QLineEdit) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Quat W:"))
-        row.addWidget(qw)
-        row.addWidget(QLabel("X:"))
-        row.addWidget(qx)
-        row.addWidget(QLabel("Y:"))
-        row.addWidget(qy)
-        row.addWidget(QLabel("Z:"))
-        row.addWidget(qz)
-        return row
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -226,7 +197,7 @@ class Sim2RealDebugger(QMainWindow):
         ros_layout.addWidget(self.btn_ros_connect)
 
         ros_layout.addStretch()
-        ros_group.setStyleSheet(self._STYLE_BOX)
+        ros_group.setStyleSheet(STYLE_GROUP_BOX)
         return ros_group
 
     def _build_model_traj_status_row(self) -> QHBoxLayout:
@@ -234,14 +205,14 @@ class Sim2RealDebugger(QMainWindow):
         row.setSpacing(8)
 
         self.lbl_model_status = QLabel("Policy: None (drop .pt/.pth)")
-        self.lbl_model_status.setStyleSheet(self._STYLE_STATUS_IDLE)
+        self.lbl_model_status.setStyleSheet(STYLE_STATUS_IDLE)
         self.lbl_model_status.setAlignment(Qt.AlignCenter)
         self.lbl_model_status.setMaximumHeight(40)
         self.lbl_model_status.setWordWrap(True)
         row.addWidget(self.lbl_model_status, 1)
 
         self.lbl_traj_status = QLabel("Trajectory: None (drop .npz)")
-        self.lbl_traj_status.setStyleSheet(self._STYLE_STATUS_IDLE)
+        self.lbl_traj_status.setStyleSheet(STYLE_STATUS_IDLE)
         self.lbl_traj_status.setAlignment(Qt.AlignCenter)
         self.lbl_traj_status.setMaximumHeight(40)
         self.lbl_traj_status.setWordWrap(True)
@@ -261,7 +232,7 @@ class Sim2RealDebugger(QMainWindow):
 
     def _build_control_group(self) -> QGroupBox:
         g = QGroupBox("Control Section")
-        g.setStyleSheet(self._STYLE_BOX)
+        g.setStyleSheet(STYLE_GROUP_BOX)
         layout = QVBoxLayout(g)
         # Control Section은 세로로 최소 크기만 차지하도록 마진/간격을 줄이고,
         # Observation Debug가 남는 공간을 더 많이 쓰도록 사이즈 정책을 제한
@@ -269,7 +240,6 @@ class Sim2RealDebugger(QMainWindow):
         layout.setSpacing(4)
         g.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
-        # 상단: Inference Start / Stop 버튼 행
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
 
@@ -288,14 +258,12 @@ class Sim2RealDebugger(QMainWindow):
         self.btn_infer_stop.setEnabled(False)
         btn_row.addWidget(self.btn_infer_stop)
 
-        # Loop 여부를 제어하는 체크박스 (체크 시 loop=True, 해제 시 loop=False)
         self.chk_infer_loop = QCheckBox("Loop")
         self.chk_infer_loop.setChecked(self.infer.loop)
         self.chk_infer_loop.setStyleSheet("font-size: 11px;")
         self.chk_infer_loop.stateChanged.connect(self._on_inference_loop_changed)
         btn_row.addWidget(self.chk_infer_loop)
 
-        # 초기 자세로 리셋 버튼
         self.btn_reset_pose = QPushButton("Reset to Init Pose")
         self.btn_reset_pose.setStyleSheet(
             "QPushButton { background-color: #444488; color: white; font-weight: bold; padding: 4px 10px; }"
@@ -306,17 +274,12 @@ class Sim2RealDebugger(QMainWindow):
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
-        # hammer/target controls 제거: 상수값은 코드 상단에서 정의된 상수 사용
-
-        # inference controls
         ir = QHBoxLayout()
         ir.setSpacing(6)
 
-        # 왼쪽: 두 줄로 정리된 입력 필드 (촘촘한 배치를 위해 간격 축소)
         inputs_col = QVBoxLayout()
         inputs_col.setSpacing(2)
 
-        # 1행: Scale (0.0~0.2만 허용), Speed (사용자 입력, 기본 0.8)
         row_scale = QHBoxLayout()
         row_scale.setSpacing(4)
         row_scale.addWidget(QLabel("Scale:"))
@@ -340,7 +303,6 @@ class Sim2RealDebugger(QMainWindow):
         row_scale.addWidget(self.speed_input)
         inputs_col.addLayout(row_scale)
 
-        # 2행: Duration, TauExt, Progress
         row_bottom = QHBoxLayout()
         row_bottom.setSpacing(4)
         row_bottom.addWidget(QLabel("Duration:"))
@@ -350,18 +312,14 @@ class Sim2RealDebugger(QMainWindow):
 
         inputs_col.addLayout(row_bottom)
         ir.addLayout(inputs_col)
-
-        # 오른쪽: (빈) 컬럼으로 좌우 여백 맞춤
-        btns_col = QVBoxLayout()
-        btns_col.addStretch(1)
-        ir.addLayout(btns_col)
+        ir.addStretch(1)
         layout.addLayout(ir)
 
         return g
 
     def _build_obs_debug_group(self) -> QGroupBox:
         g = QGroupBox("Observation Debug")
-        g.setStyleSheet(self._STYLE_BOX)
+        g.setStyleSheet(STYLE_GROUP_BOX)
         layout = QVBoxLayout(g)
         layout.setSpacing(4)
 
@@ -405,12 +363,6 @@ class Sim2RealDebugger(QMainWindow):
             layout.addLayout(row)
 
         return g
-
-    @staticmethod
-    def _section_title(text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setStyleSheet("font-weight: bold; font-size: 12px; margin-top: 8px;")
-        return lbl
 
     # ----------------------------------------------------------------------------------
     # Providers / Normalization
@@ -461,14 +413,14 @@ class Sim2RealDebugger(QMainWindow):
     def unload_policy(self) -> None:
         self.policy.unload()
         self.lbl_model_status.setText("Policy: None (drop .pt/.pth)")
-        self.lbl_model_status.setStyleSheet(self._STYLE_STATUS_IDLE)
+        self.lbl_model_status.setStyleSheet(STYLE_STATUS_IDLE)
 
     def unload_trajectory(self) -> None:
         self.loaded_trajectory = None
         self.infer.set_trajectory(None)
         self.plot_panel.set_trajectory_data(None)
         self.lbl_traj_status.setText("Trajectory: None (drop .npz)")
-        self.lbl_traj_status.setStyleSheet(self._STYLE_STATUS_IDLE)
+        self.lbl_traj_status.setStyleSheet(STYLE_STATUS_IDLE)
 
     # ----------------------------------------------------------------------------------
     # Loaders
@@ -483,12 +435,12 @@ class Sim2RealDebugger(QMainWindow):
             msg = f"✅ Loaded Policy: {os.path.basename(file_path)} ({model_type})"
 
             self.lbl_model_status.setText(msg)
-            self.lbl_model_status.setStyleSheet(self._STYLE_STATUS_OK)
+            self.lbl_model_status.setStyleSheet(STYLE_STATUS_OK)
             LOG.info("Policy loaded: %s", file_path)
         except Exception as e:
             self.policy.unload()
             self.lbl_model_status.setText(f"❌ Policy Load Failed: {str(e)}")
-            self.lbl_model_status.setStyleSheet(self._STYLE_STATUS_ERR)
+            self.lbl_model_status.setStyleSheet(STYLE_STATUS_ERR)
             LOG.exception("Policy load failed: %s", file_path)
 
     def load_trajectory_file(self, file_path: str) -> None:
@@ -503,14 +455,14 @@ class Sim2RealDebugger(QMainWindow):
 
             ok = bool(traj.get("action_ok")) and bool(traj.get("order_ok"))
             self.lbl_traj_status.setText(f"✅ Trajectory Loaded: {os.path.basename(file_path)}")
-            self.lbl_traj_status.setStyleSheet(self._STYLE_STATUS_OK if ok else self._STYLE_STATUS_ERR)
+            self.lbl_traj_status.setStyleSheet(STYLE_STATUS_OK if ok else STYLE_STATUS_ERR)
 
             LOG.info("Trajectory loaded: %s", file_path)
         except Exception as e:
             self.loaded_trajectory = None
             self.infer.set_trajectory(None)
             self.lbl_traj_status.setText(f"❌ Trajectory Load Failed: {str(e)}")
-            self.lbl_traj_status.setStyleSheet(self._STYLE_STATUS_ERR)
+            self.lbl_traj_status.setStyleSheet(STYLE_STATUS_ERR)
             LOG.exception("Trajectory load failed: %s", file_path)
 
     # ----------------------------------------------------------------------------------
@@ -518,13 +470,10 @@ class Sim2RealDebugger(QMainWindow):
     # ----------------------------------------------------------------------------------
 
     def _on_inference_start(self) -> None:
-        # Loop 체크박스 상태를 InferenceEngine.loop에 반영
         if hasattr(self, "chk_infer_loop"):
             self.infer.loop = self.chk_infer_loop.isChecked()
 
-        # Scale: 0.0~0.2 (QDoubleSpinBox가 이미 제한함)
         rs = float(self.residual_scale_input.value())
-        # Speed: 사용자 입력값 (QDoubleSpinBox)
         speed = float(self.speed_input.value())
         self.infer.speed = speed
 
@@ -544,14 +493,12 @@ class Sim2RealDebugger(QMainWindow):
             residual_scale=rs,
             max_duration_s=duration_s,
         )
-        # 시작 시 사용자 지정 speed 반영
         self.infer.speed = speed
         self.btn_infer_start.setEnabled(False)
         self.btn_infer_stop.setEnabled(True)
         LOG.info("Inference started (residual_scale=%.3f)", rs)
 
     def _on_inference_loop_changed(self, state: int) -> None:
-        """Loop 체크박스 변경 시 InferenceEngine.loop 동기화."""
         self.infer.loop = bool(state == Qt.Checked)
 
     def _on_inference_stop(self) -> None:
@@ -561,7 +508,6 @@ class Sim2RealDebugger(QMainWindow):
         LOG.info("Inference stopped")
 
     def _on_reset_pose(self) -> None:
-        """초기 자세로 리셋 버튼 클릭 시 호출."""
         self.infer.reset_to_init_pose()
         LOG.info("Reset to initial pose requested")
 
@@ -797,8 +743,6 @@ class Sim2RealDebugger(QMainWindow):
         while self._control_running:
             t0 = time.perf_counter()
             data = self._normalized_data()
-            # playback_speed: inference가 실행 중이면 policy가 출력한 값, 아니면 기본값(1.0)
-            current_speed = float(getattr(self.infer, "speed", 1.0))
             self._update_obs_rate(data)
             self.infer.step_and_inject(data, interval)
             with self._last_data_lock:
@@ -816,12 +760,10 @@ class Sim2RealDebugger(QMainWindow):
         self.plot_panel.ingest_obs(data)
         self._sync_inference_buttons()
 
-        # Speed: 사용자 입력값을 추론에 반영 (실시간 조절 가능)
         if hasattr(self, "speed_input"):
             self.infer.speed = float(self.speed_input.value())
 
     def _sync_inference_buttons(self) -> None:
-        """인퍼런스 실행 상태에 따라 버튼 활성화 동기화."""
         running = bool(self.infer.running)
         self.btn_infer_start.setEnabled(not running)
         self.btn_infer_stop.setEnabled(running)

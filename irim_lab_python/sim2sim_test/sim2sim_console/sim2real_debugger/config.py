@@ -1,8 +1,46 @@
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, Dict, List
+
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# 공통 타입 (DDVC: 타입과 스펙을 한 곳에서 관리)
+# -----------------------------------------------------------------------------
+ObsDict = Dict[str, np.ndarray]
+ObsProvider = Callable[[], ObsDict]
 
 # observation freshness (ROS streaming)
 OBS_TIMEOUT_SEC = 1.0
+
+# -----------------------------------------------------------------------------
+# UI / Display (매직값 제거 - DDVC 101)
+# -----------------------------------------------------------------------------
+WINDOW_TITLE = "Sim2Real Proprioception Debugger (PyQtGraph + DropZone)"
+WINDOW_WIDTH = 1618
+WINDOW_HEIGHT = 1000
+
+STYLE_GROUP_BOX = (
+    "QGroupBox { font-weight: bold; border: 2px solid #555; border-radius: 5px; "
+    "margin-top: 10px; padding-top: 10px; } "
+    "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }"
+)
+STYLE_STATUS_OK = "background-color: #004400; color: #00ff00; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
+STYLE_STATUS_ERR = "background-color: #550000; color: #ffaaaa; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
+STYLE_STATUS_IDLE = "background-color: #444; padding: 4px 8px; font-weight: bold; font-size: 11px; border-radius: 5px;"
+
+# PlotPanel: 관측별 플롯 색상, 인덱스 스핀박스 최대값
+PLOT_INDEX_MAX = 4096
+PLOT_COLOR_MAP: Dict[str, str] = {
+    "joint_pos": "#00ff00",
+    "right_hand_joint_torque": "#CC66FF",
+    "right_hand_base_pos": "#FF66CC",
+    "last_actions": "#66CCFF",
+    "reference_joint_pos": "#FF4444",
+    "hammer_pos": "#FFAA00",
+    "target_right_hand_pose": "#66FFCC",
+}
+PLOT_COLOR_DEFAULT = "#AAAAAA"
+PLOT_CURVE_WIDTH = 4
 
 
 @dataclass
@@ -93,6 +131,8 @@ ALLEX_INIT_POSE: List[float] = [
 ]
 
 __all__ = [
+    "ObsDict",
+    "ObsProvider",
     "DebuggerConfig",
     "ObsSpec",
     "OBS_SPECS",
@@ -101,4 +141,15 @@ __all__ = [
     "ALLEX_ACTION_JOINT_NAMES",
     "ALLEX_INIT_POSE",
     "OBS_TIMEOUT_SEC",
+    "WINDOW_TITLE",
+    "WINDOW_WIDTH",
+    "WINDOW_HEIGHT",
+    "STYLE_GROUP_BOX",
+    "STYLE_STATUS_OK",
+    "STYLE_STATUS_ERR",
+    "STYLE_STATUS_IDLE",
+    "PLOT_INDEX_MAX",
+    "PLOT_COLOR_MAP",
+    "PLOT_COLOR_DEFAULT",
+    "PLOT_CURVE_WIDTH",
 ]

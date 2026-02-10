@@ -3,8 +3,7 @@ from typing import Dict, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from .obs_store import ObservationStore
-from .types import ObsDict
+from .observation import ObservationStore
 
 ROS2_AVAILABLE = False
 
@@ -69,7 +68,6 @@ class ROS2ObservationSubscriber(Node):  # type: ignore[misc]
         self.create_subscription(Float32MultiArray, "/observation/joint_pos", self._cb("joint_pos"), 10)
         self.create_subscription(Float32MultiArray, "/observation/right_hand_joint_torque", self._cb_torque_default, 10)
         self.create_subscription(Float32MultiArray, "/observation/right_hand_base_pos", self._cb("right_hand_base_pos"), 10)
-        self._torque_recv_count: int = 0
 
     def _init_real_robot_subscribers(self) -> None:
         # 학습과 동일: reference_joint_pos는 추론 시 궤적 ref로 채움 (ROS 구독 없음)

@@ -1,12 +1,17 @@
 import logging
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
-from .config import EXPECTED_TOTAL_OBS_DIM, OBS_SPECS, ALLEX_INIT_POSE
-from .types import ObsDict
+from .config import (
+    ALLEX_ACTION_JOINT_NAMES,
+    ALLEX_INIT_POSE,
+    DebuggerConfig,
+    EXPECTED_TOTAL_OBS_DIM,
+    OBS_SPECS,
+    ObsDict,
+)
 from .policy import PolicyWrapper
-from .config import DebuggerConfig
 
 LOG = logging.getLogger(__name__)
 
@@ -25,12 +30,8 @@ class InferenceEngine:
         self.residual_scale = 0.1
         self.loop = False  # 학습과 동일하게 기본값 False (trajectory 끝나면 마지막 프레임 유지)
         self._trajectory_finished = False
-        # elapsed wall-clock time for current inference (초 단위)
         self._elapsed_time: float = 0.0
         self._max_duration_s: float = float(cfg.infer_duration_s)
-        # trajectory 메타데이터 (sim과 동일한 progress 계산용)
-        self._traj_num_frames: int = 0
-        self._traj_duration: float = 0.0
         self._last_ref_frame: Optional[np.ndarray] = None
         # streaming obs가 잠시 stale될 때 마지막 유효 값을 사용하는 캐시
         self._streaming_cache: dict[str, np.ndarray] = {}
@@ -67,15 +68,6 @@ class InferenceEngine:
 
     def set_trajectory(self, traj: Optional[dict]) -> None:
         self.trajectory = traj
-        if traj is not None:
-            # TrajectoryLoader.load_npz 에서 넘어온 메타데이터 사용
-            num_frames = int(traj.get("num_frames", 0))
-            self._traj_num_frames = max(num_frames, 0)
-            # base_traj_hz 기준 전체 길이(초) 근사
-            self._traj_duration = (self._traj_num_frames / float(self.base_traj_hz)) if self.base_traj_hz > 0.0 else 0.0
-        else:
-            self._traj_num_frames = 0
-            self._traj_duration = 0.0
         self._trajectory_finished = False
         self._last_ref_frame = None
         self._streaming_cache.clear()
@@ -386,11 +378,6 @@ class InferenceEngine:
         # 학습과 동일: reference_joint_pos (궤적 목표 위치)
         data["reference_joint_pos"] = ref.astype(np.float32, copy=False)
 
-        # # 임시: 추론 시 joint torque 19개 모두 0으로 고정 (토크 미사용 테스트용)
-        # _torque_zeros = np.zeros(19, dtype=np.float32)
-        # data["right_hand_joint_torque"] = _torque_zeros
-        # self._streaming_cache["right_hand_joint_torque"] = _torque_zeros
-
         obs_vec = self._pack_obs(data)
         if obs_vec is not None:
             self._last_obs_vec = obs_vec
@@ -465,4 +452,54 @@ class InferenceEngine:
             self.publish_action_cb(actions)
 
 
-__all__ = ["InferenceEngine"]
+class TrajectoryLoader:
+    """NPZ 궤적 파일 로드 (actions_trajectory 등 인퍼런스 입력 형식으로 반환)."""
+
+    @staticmethod
+    def load_npz(file_path: str, num_joints: int) -> dict:
+        data = np.load(file_path, allow_pickle=True)
+        if "positions" not in data:
+            raise ValueError("NPZ file does not contain 'positions' array.")
+
+        positions = np.asarray(data["positions"])
+        if positions.ndim != 2:
+            raise ValueError(f"'positions' must be 2D (T, D), got shape {positions.shape}.")
+
+        num_frames, num_cols = positions.shape
+
+        joint_names: Optional[List[str]] = None
+        if "joint_names" in data:
+            jn_raw = data["joint_names"]
+            joint_names = jn_raw.tolist() if isinstance(jn_raw, np.ndarray) else list(jn_raw)
+
+        action_indices = None
+        action_ok = False
+        order_ok = False
+
+        if joint_names is not None:
+            name_to_idx = {n: i for i, n in enumerate(joint_names)}
+            idxs = [name_to_idx[name] for name in ALLEX_ACTION_JOINT_NAMES if name in name_to_idx]
+            if len(idxs) == len(ALLEX_ACTION_JOINT_NAMES):
+                action_ok = True
+                action_indices = idxs
+                order_ok = [joint_names[i] for i in action_indices] == list(ALLEX_ACTION_JOINT_NAMES)
+
+        if action_indices is not None:
+            actions_trajectory = positions[:, action_indices].astype(np.float32, copy=False)
+        else:
+            actions_trajectory = positions[:, :num_joints].astype(np.float32, copy=False)
+
+        return {
+            "file_path": file_path,
+            "num_frames": int(num_frames),
+            "num_cols": int(num_cols),
+            "joint_names": joint_names,
+            "action_indices": action_indices,
+            "positions": positions,
+            "actions_trajectory": actions_trajectory,
+            "order_ok": bool(order_ok),
+            "action_ok": bool(action_ok),
+        }
+
+
+__all__ = ["InferenceEngine", "TrajectoryLoader"]

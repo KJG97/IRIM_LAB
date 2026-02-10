@@ -1,14 +1,82 @@
+"""UI widgets: drag-drop zone and observation plot panel."""
+
 from typing import List, Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ..types import ObsDict
+from .config import PLOT_COLOR_DEFAULT, PLOT_COLOR_MAP, PLOT_CURVE_WIDTH, PLOT_INDEX_MAX
+from .config import ObsDict
+
+
+class DropZone(QFrame):
+    """Drag-and-drop zone for policy (.pt/.pth) and trajectory (.npz) files."""
+
+    files_dropped = Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._set_idle_style()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+
+        lbl = QLabel("Drag&Drop")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("font-size: 32px; font-weight: bold; color: #e0e0e0;")
+        layout.addWidget(lbl)
+
+    @staticmethod
+    def _is_supported(path: str) -> bool:
+        p = path.lower()
+        return p.endswith((".pt", ".pth", ".npz"))
+
+    def _set_idle_style(self) -> None:
+        self.setStyleSheet("QFrame { background-color: #333; border: 2px dashed #777; border-radius: 10px; }")
+
+    def _set_ready_style(self) -> None:
+        self.setStyleSheet("QFrame { background-color: #2b5c2b; border: 2px dashed #00ff00; border-radius: 10px; }")
+
+    def dragEnterEvent(self, event) -> None:
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        if any(self._is_supported(p) for p in paths):
+            self._set_ready_style()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_idle_style()
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self._set_idle_style()
+        if not event.mimeData().hasUrls():
+            return
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        paths = [p for p in paths if self._is_supported(p)]
+        if paths:
+            self.files_dropped.emit(paths)
 
 
 class PlotPanel(QWidget):
+    """Observation plot panel with ring buffer and trajectory overlay."""
+
     def __init__(self, buffer_size: int = 400, plot_update_hz: int = 30, parent=None):
         super().__init__(parent)
         self.buffer_size = int(buffer_size)
@@ -17,7 +85,7 @@ class PlotPanel(QWidget):
         self._selected_key: Optional[str] = None
         self._selected_index: int = -1
 
-        self._buf_y: Optional[np.ndarray] = None  # (T, D)
+        self._buf_y: Optional[np.ndarray] = None
         self._cursor: int = 0
         self._filled: bool = False
         self._curves: List[pg.PlotDataItem] = []
@@ -33,7 +101,7 @@ class PlotPanel(QWidget):
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
 
         self.spn_index = QSpinBox()
-        self.spn_index.setRange(-1, 4096)
+        self.spn_index.setRange(-1, PLOT_INDEX_MAX)
         self.spn_index.setValue(-1)
         self.spn_index.setToolTip("component index (-1 = ALL)")
         self.spn_index.valueChanged.connect(self._on_index_changed)
@@ -56,13 +124,10 @@ class PlotPanel(QWidget):
         self.plot_widget.setLabel("bottom", "t (samples)")
         self.plot_widget.setLabel("left", "value")
         self.plot_widget.setTitle("Plot Display")
-        # 축에서 자동 SI prefix(예: 1e-3 스케일링) 비활성화해 실제 값 그대로 표시
-        axis_left = self.plot_widget.getAxis("left")
-        axis_bottom = self.plot_widget.getAxis("bottom")
-        if axis_left is not None:
-            axis_left.enableAutoSIPrefix(False)
-        if axis_bottom is not None:
-            axis_bottom.enableAutoSIPrefix(False)
+        for axis_name in ("left", "bottom"):
+            axis = self.plot_widget.getAxis(axis_name)
+            if axis is not None:
+                axis.enableAutoSIPrefix(False)
         layout.addWidget(self.plot_widget, 1)
 
         self._plot_timer = QTimer(self)
@@ -85,9 +150,8 @@ class PlotPanel(QWidget):
             self.set_max_index(-1)
 
     def set_max_index(self, max_idx: int) -> None:
-        """관측 차원에 맞게 Index 스핀박스 범위 설정. max_idx < 0이면 전체(4096) 허용."""
         if max_idx < 0:
-            self.spn_index.setRange(-1, 4096)
+            self.spn_index.setRange(-1, PLOT_INDEX_MAX)
         else:
             self.spn_index.setRange(-1, max(0, max_idx))
             if self._selected_index > max_idx:
@@ -98,7 +162,6 @@ class PlotPanel(QWidget):
         self._trajectory_data = np.asarray(positions) if positions is not None else None
 
     def plot_trajectory_index0(self) -> None:
-        """index 0 trajectory를 단일 곡선으로 표시."""
         if self._trajectory_data is None:
             return
         pos = np.asarray(self._trajectory_data)
@@ -153,7 +216,6 @@ class PlotPanel(QWidget):
             self.plot_widget.removeItem(c)
         self._curves.clear()
 
-        # trajectory curve 제거(실시간 plot 모드에선 방해)
         if self._trajectory_curve is not None:
             self.plot_widget.removeItem(self._trajectory_curve)
             self._trajectory_curve = None
@@ -165,18 +227,8 @@ class PlotPanel(QWidget):
         self.plot_widget.enableAutoRange(y=True, x=False)
 
     def _make_pen(self) -> pg.mkPen:
-        # 모든 Obs에 고정된 색상/두께 적용 (굵기=4)
-        color_map = {
-            "joint_pos": "#00ff00",
-            "right_hand_joint_torque": "#CC66FF",
-            "right_hand_base_pos": "#FF66CC",
-            "last_actions": "#66CCFF",
-            "hammer_pos": "#FFAA00",
-            "reference_joint_pos": "#FF4444",
-            "target_right_hand_pose": "#66FFCC",
-        }
-        color = color_map.get(self._selected_key, "#AAAAAA")
-        return pg.mkPen(color=color, width=4)
+        color = PLOT_COLOR_MAP.get(self._selected_key, PLOT_COLOR_DEFAULT)
+        return pg.mkPen(color=color, width=PLOT_CURVE_WIDTH)
 
     def redraw(self) -> None:
         if self._buf_y is None or not self._curves:
@@ -213,4 +265,4 @@ class PlotPanel(QWidget):
         self.clear_buffer()
 
 
-__all__ = ["PlotPanel"]
+__all__ = ["DropZone", "PlotPanel"]
