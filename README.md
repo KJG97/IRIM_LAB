@@ -139,7 +139,7 @@ git clone <repository_url> IRIM_LAB
 │  │ LOAD/RUN/ROS2   │  │ Policy·Traj·ROS2│  │                   │ │
 │  └─────────────────┘  └─────────────────┘  └───────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
-│  ROS2: Pub/Sub 독립 제어 · Domain ID · 관절·토크·액션 송수신        │
+│  ROS2: Pub/Sub 독립 제어 · Domain ID · 관절·토크·액션 송수신          │
 ├─────────────────────────────────────────────────────────────────┤
 │  DDVC: 100_PRD · 101_Refactoring · 102_Commit_Push              │
 └─────────────────────────────────────────────────────────────────┘
@@ -197,8 +197,8 @@ IRIM_LAB/
 
 ```
 ┌──────────────────┐     ┌──────────────────┐
-│  extension.py    │────▶│  UIBuilder /     │
-│  메뉴·창 등록     │     │  SensorLabUIBuilder│
+│  extension.py    │───▶│  UIBuilder /      │
+│  메뉴·창 등록      │     │ SensorLabUIBuilder│
 └──────────────────┘     └────────┬─────────┘
                                   │
                     ┌─────────────┼─────────────┐
@@ -207,7 +207,7 @@ IRIM_LAB/
              │ scenario │  │ ros2/    │  │ sim2sim_     │
              │ (Sim2Sim)│  │ manager  │  │ console      │
              └──────────┘  └──────────┘  │ (Debugger)   │
-                                          └──────────────┘
+                                         └──────────────┘
 ```
 
 - **Sim2Sim**: `ui_builder.py` → `scenario.py`, `ros2/` — LOAD/RUN, 관절·ROS2 제어
