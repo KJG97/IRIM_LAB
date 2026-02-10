@@ -99,6 +99,10 @@ class ROS2CallbackHandler:
     def set_scenario_reference(self, scenario_ref):
         self._scenario = scenario_ref
 
+    def set_joint_control_reference(self, effective_joints, joint_values_ref):
+        """매니저에서 호출. 콜백 핸들러는 관절 수/참조를 사용하지 않으며 no-op."""
+        pass
+
 
 # -----------------------------------------------------------------------------
 # ROS2 통합 관리자
