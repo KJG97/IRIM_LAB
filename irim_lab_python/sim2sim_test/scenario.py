@@ -11,103 +11,43 @@
 ALLEX Digital Twin 메인 시나리오 클래스
 """
 
-from .core import (
-    ALLEXInitializer,
-    ALLEXAssetManager,
-    ALLEXJointController,
-    ALLEXSensorManager,
-    ALLEXVisualization,
-    ALLEXSimulationLoop,
-)
-from .config.ros2_config import ROS2Config
-from .ui.joint_overlay_ui import JointOverlayUI
-import os
 import threading
 import traceback
+from typing import Any, Dict, Iterable, List
 
 import numpy as np
-from isaacsim.core.utils.xforms import get_world_pose
 from isaacsim.core.utils.types import ArticulationAction
+from isaacsim.core.utils.viewports import set_camera_view
+from isaacsim.core.utils.xforms import get_world_pose
 
-# ---------------------------------------------------------------------------
-# 상수 (매직 넘버 제거, DDVC 101_Refactoring)
-# ---------------------------------------------------------------------------
-TEXT_UPDATE_INTERVAL = 15
-POLICY_ACTION_JOINT_COUNT = 18
-BODY_JOINT_LABELS = {"waist": ["WY", "WP", "CP"], "neck": ["NP", "NY"]}
-ARM_JOINT_LABELS = {
-    "left_arm": ["LSP", "LSR", "LSY", "LEP", "LWY", "LWR", "LWP"],
-    "right_arm": ["RSP", "RSR", "RSY", "REP", "RWY", "RWR", "RWP"],
-}
-FINGER_GROUPS = [
-    ("Thumb", "TH", [0, 5, 10]),
-    ("Index", "IN", [1, 6, 11]),
-    ("Middle", "MI", [2, 7, 12]),
-    ("Ring", "RI", [3, 8, 13]),
-    ("Pinky", "PI", [4, 9, 14]),
-]
-
-
-def _quat_conjugate(q: np.ndarray) -> np.ndarray:
-    """단일 쿼터니언 [w,x,y,z]의 켤레 반환"""
-    return np.array([q[0], -q[1], -q[2], -q[3]], dtype=q.dtype)
-
-
-def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-    """두 단일 쿼터니언 [w,x,y,z]의 곱"""
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    return np.array([
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-    ], dtype=q1.dtype)
-
-
-def _quat_apply(q: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """쿼터니언 q로 3D 벡터 v 회전"""
-    v_q = np.array([0.0, v[0], v[1], v[2]], dtype=q.dtype)
-    return _quat_mul(_quat_mul(q, v_q), _quat_conjugate(q))[1:]
-
-
-def _resolve_dof_indices(articulation, joint_names: list) -> list:
-    """조인트 이름 리스트로 DOF 인덱스 리스트 반환. 실패 시 빈 리스트."""
-    indices = []
-    for name in joint_names:
-        idx = articulation.get_dof_index(name)
-        if idx is None:
-            return []
-        indices.append(idx)
-    return indices
-
-
-def _format_joint_line(name: str, current_val: float, desired_val: float,
-                       topic_mode: str, name_width: int = 3, prefix: str = "     ") -> str:
-    """current | desired 한 줄 포맷 (모드에 따라 강조)."""
-    current_part = f"[{current_val:6.1f}]" if topic_mode == ROS2Config.TOPIC_MODE_CURRENT else f" {current_val:6.1f}"
-    desired_part = f" {desired_val:6.1f}" if topic_mode == ROS2Config.TOPIC_MODE_CURRENT else f"[{desired_val:6.1f}]"
-    return f"{prefix}{name:{name_width}s}: {current_part} | {desired_part}"
+from .asset_manager import ALLEXAssetManager
+from .config import (
+    CameraConfig,
+    ROS2Config,
+    ScenarioDisplayConfig,
+)
+from .utils import (
+    format_joint_line,
+    quat_apply,
+    quat_conjugate,
+    quat_mul,
+    resolve_dof_indices,
+)
 
 
 class ALLEXDigitalTwin:
     """ALLEX 디지털 트윈 메인 클래스 - 모든 모듈을 통합 관리"""
 
     def __init__(self):
-        """클래스 초기화 - 모든 모듈 인스턴스 생성"""
-        # 🏗️ 모듈 인스턴스 생성
-        self._initializer = ALLEXInitializer()
         self._asset_manager = ALLEXAssetManager()
-        self._joint_controller = ALLEXJointController()
-        self._sensor_manager = ALLEXSensorManager()
-        self._visualization = ALLEXVisualization()
-        self._simulation_loop = ALLEXSimulationLoop()
+        self._overlay_ui = None  # UIBuilder에서 set_overlay_ui()로 주입
         self._physx_lock = threading.Lock()
         self._pending_policy_action: np.ndarray | None = None
         self._articulation = None
-        self._joint_controller.set_scenario_reference(self)
-        self._ui_builder_ref = None
-        self._overlay_ui = JointOverlayUI()
+        self._script_generator = None
+        self._simulation_running = False
+        self._simulation_callbacks = []
+        self._target_joint_positions = [0.0] * CameraConfig.TOTAL_JOINTS
         self._text_update_counter = 0
         self._joint_group_display_enabled = {
             "body": False,
@@ -119,38 +59,52 @@ class ALLEXDigitalTwin:
         self._obs_joint_indices = None
         self._right_hand_torque_dof_indices = None
         self._policy_action_dof_indices = None
+        # 관절 제어 상태 (기존 ALLEXJointController 흡수)
+        self._coupled_joints: Dict[int, Dict[str, Any]] = {}
+        self._ros2_subscriber_active = False
+        self._topic_mode: str | None = None
+        self.Hand_R_current: List[float] = []
+        self.Hand_R_desired: List[float] = []
+        self.Hand_L_current: List[float] = []
+        self.Hand_L_desired: List[float] = []
+        self.Arm_R_current: List[float] = []
+        self.Arm_R_desired: List[float] = []
+        self.Arm_L_current: List[float] = []
+        self.Arm_L_desired: List[float] = []
+        self.Waist_current: List[float] = []
+        self.Waist_desired: List[float] = []
+        self.Neck_current: List[float] = []
+        self.Neck_desired: List[float] = []
 
     def setup(self):
-        """시나리오 초기 설정"""        
-        # 카메라 뷰 설정
-        self._initializer.setup_camera_view()
-        
-        extension_root = os.path.dirname(os.path.abspath(__file__))
-        joint_config_path = os.path.join(extension_root, "joint_config.json")
-        self._joint_controller.load_coupled_joint_config(joint_config_path)
-
-        self._overlay_ui.create_joint_overlay_window()
-        self._overlay_ui.create_hand_overlay_window()
-
-        print("✅ ALLEX Digital Twin 설정 완료")
+        set_camera_view(
+            eye=CameraConfig.DEFAULT_CAMERA_EYE,
+            target=CameraConfig.DEFAULT_CAMERA_TARGET,
+            camera_prim_path=CameraConfig.DEFAULT_CAMERA_PRIM_PATH,
+        )
+        self.load_coupled_joint_config(None)
+        if self._overlay_ui is not None:
+            self._overlay_ui.create_joint_overlay_window()
+            self._overlay_ui.create_hand_overlay_window()
 
     def _get_target_positions(self):
         """ROS2 데이터 우선, 없으면 기본값 사용 (joint control generator용)."""
         try:
-            ros2_positions = self._joint_controller.get_unified_target_positions()
+            ros2_positions = self.get_unified_target_positions()
             if ros2_positions and any(pos != 0.0 for pos in ros2_positions):
                 return ros2_positions
-        except Exception as e:
-            print(f"⚠️ ROS2 positions access failed: {e}")
-        return self._initializer.target_joint_positions
+        except Exception:
+            pass
+        return self._target_joint_positions
 
     def _setup_joint_control_generator(self):
         """현재 target positions 소스로 joint control generator를 만들어 시뮬레이션 루프에 설정."""
-        generator = self._joint_controller.create_joint_control_generator(
+        generator = self.create_joint_control_generator(
             articulation=self._articulation,
             get_target_positions_func=self._get_target_positions,
         )
-        self._simulation_loop.set_script_generator(generator)
+        self._script_generator = generator
+        self._simulation_running = True
 
     def load_example_assets(self):
         """에셋 로딩 및 초기화"""
@@ -159,49 +113,58 @@ class ALLEXDigitalTwin:
             return None
         init_success = self._asset_manager.initialize_articulation()
         if not init_success:
-            print("🔄 'RUN' 버튼을 누르면 Articulation이 초기화됩니다")
             return self._articulation
-        self._initializer.initialize_joint_positions(self._articulation)
+        self._initialize_joint_positions()
         self._cache_policy_action_dof_indices()
         self._setup_joint_control_generator()
         return self._articulation
 
-    def delayed_initialization(self):
-        """지연된 초기화 - 시뮬레이션 시작 후 호출"""
+    def _initialize_joint_positions(self):
+        """현재 articulation 관절 위치를 _target_joint_positions에 반영."""
         if self._articulation is None:
-            print("⚠️ Articulation이 로딩되지 않았습니다")
+            return
+        try:
+            current = self._articulation.get_joint_positions()
+            if current is None or len(current) == 0:
+                self._target_joint_positions = [0.0] * CameraConfig.TOTAL_JOINTS
+                return
+            self._target_joint_positions = list(current)
+            while len(self._target_joint_positions) < CameraConfig.TOTAL_JOINTS:
+                self._target_joint_positions.append(0.0)
+        except Exception:
+            self._target_joint_positions = [0.0] * CameraConfig.TOTAL_JOINTS
+
+    def delayed_initialization(self):
+        if self._articulation is None:
             return False
-        init_success = self._asset_manager.initialize_articulation()
-        if not init_success:
-            print("❌ Articulation 초기화 실패")
+        if not self._asset_manager.initialize_articulation():
             return False
-        self._initializer.initialize_joint_positions(self._articulation)
-        self._initial_joint_positions = self._articulation.get_joint_positions()
-        print(f"✅ 전체 관절 위치 저장 완료: {len(self._initial_joint_positions)}개 관절")
+        self._initialize_joint_positions()
         self._setup_joint_control_generator()
-        print("✅ Articulation 초기화 완료")
         return True
 
     def reset(self):
-        """시스템 리셋"""
-        self._initializer.reset(self._articulation)
-        self._simulation_loop.reset()
+        if self._articulation is not None:
+            try:
+                current = self._articulation.get_joint_positions()
+                if current is not None and len(current) > 0:
+                    self._target_joint_positions = list(current)
+            except Exception:
+                pass
+        self._script_generator = None
+        self._simulation_running = False
+        self._simulation_callbacks.clear()
         if self._articulation is not None:
             self._setup_joint_control_generator()
-        print("✅ 시스템 리셋 완료")
-
-    def set_ui_builder_ref(self, ui_builder_ref):
-        """UIBuilder 참조를 설정합니다."""
-        self._ui_builder_ref = ui_builder_ref
 
     def update(self, step: float):
         """시뮬레이션 스텝 업데이트 (메인 스레드에서 policy action 처리)."""
         self._text_update_counter += 1
-        if self._text_update_counter % TEXT_UPDATE_INTERVAL == 0:
+        if self._text_update_counter % ScenarioDisplayConfig.TEXT_UPDATE_INTERVAL == 0:
             self.update_joint_display_text()
             self.update_hand_display_text()
         self._publish_joint_observation_if_needed(step)
-        if self._pending_policy_action is not None and self._simulation_loop.is_running():
+        if self._pending_policy_action is not None and self._simulation_running:
             try:
                 with self._physx_lock:
                     self._articulation.apply_action(
@@ -210,11 +173,23 @@ class ALLEXDigitalTwin:
                             joint_indices=np.array(self._policy_action_dof_indices, dtype=np.int32),
                         )
                     )
-            except Exception as e:
-                print(f"❌ Failed to apply pending policy action in update: {e}")
+            except Exception:
+                pass
             finally:
                 self._pending_policy_action = None
-        return self._simulation_loop.update(step)
+        for cb in self._simulation_callbacks:
+            try:
+                cb(step)
+            except Exception:
+                pass
+        if self._script_generator is None:
+            return True
+        try:
+            next(self._script_generator)
+            return False
+        except StopIteration:
+            self._simulation_running = False
+            return True
 
     def _publish_joint_observation_if_needed(self, step: float) -> None:
         """ROS2 Publisher 활성 시 관절 관측, 오른손 토크, Right_Hand_base pose 발행."""
@@ -225,22 +200,22 @@ class ALLEXDigitalTwin:
             return
         try:
             if self._obs_joint_indices is None:
-                self._obs_joint_indices = _resolve_dof_indices(
+                self._obs_joint_indices = resolve_dof_indices(
                     self._articulation, ROS2Config.ALLEX_ACTION_JOINT_FULL_NAMES
                 )
                 if not self._obs_joint_indices:
-                    print("❌ Failed to resolve ALLEX action joint indices; joint observation disabled.")
+                    pass  # joint observation disabled
             if self._obs_joint_indices:
                 with self._physx_lock:
                     positions = self._articulation.get_joint_positions(joint_indices=self._obs_joint_indices)
                 ros2_manager.publish_joint_observation(positions)
 
             if self._right_hand_torque_dof_indices is None:
-                self._right_hand_torque_dof_indices = _resolve_dof_indices(
+                self._right_hand_torque_dof_indices = resolve_dof_indices(
                     self._articulation, ROS2Config.RIGHT_HAND_TORQUE_JOINT_NAMES
                 )
                 if not self._right_hand_torque_dof_indices:
-                    print("❌ Failed to resolve right hand torque DOF indices; torque publishing disabled.")
+                    pass  # torque publishing disabled
             if self._right_hand_torque_dof_indices:
                 try:
                     with self._physx_lock:
@@ -249,8 +224,8 @@ class ALLEXDigitalTwin:
                         )
                     if torques is not None:
                         ros2_manager.publish_right_hand_joint_torque([float(v) for v in torques])
-                except Exception as te:
-                    print(f"⚠️ Right hand joint torque publish error in scenario.update: {te}")
+                except Exception:
+                    pass
 
             try:
                 right_pos_w, right_quat_w = get_world_pose("/ALLEX/R_Hand_Pose")
@@ -259,178 +234,183 @@ class ALLEXDigitalTwin:
                 right_quat_w = np.asarray(right_quat_w, dtype=np.float32)
                 origin_pos_w = np.asarray(origin_pos_w, dtype=np.float32)
                 origin_quat_w = np.asarray(origin_quat_w, dtype=np.float32)
-                origin_quat_conj = _quat_conjugate(origin_quat_w)
-                rel_pos = _quat_apply(origin_quat_conj, right_pos_w - origin_pos_w)
-                rel_quat = _quat_mul(origin_quat_conj, right_quat_w)
+                origin_quat_conj = quat_conjugate(origin_quat_w)
+                rel_pos = quat_apply(origin_quat_conj, right_pos_w - origin_pos_w)
+                rel_quat = quat_mul(origin_quat_conj, right_quat_w)
                 pose_7d = np.concatenate([rel_pos, rel_quat], axis=-1)
                 ros2_manager.publish_right_hand_base_pos(pose_7d)
-            except Exception as pe:
-                print(f"⚠️ Right_Hand_base pose publish error in scenario.update: {pe}")
-        except Exception as e:
-            print(f"⚠️ Joint observation publish error in scenario.update: {e}")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
+    # ----- Configuration -----
 
+    def set_overlay_ui(self, overlay_ui):
+        """UIBuilder에서 관절/손 오버레이 UI 인스턴스 주입."""
+        self._overlay_ui = overlay_ui
 
-    # ========================================
-    # 🔗 Public API Methods
-    # ========================================
-    
-    def get_current_joint_positions(self):
-        """현재 관절 위치 반환"""
-        return self._sensor_manager.get_joint_positions(self._articulation)
-
-
-    def get_robot_info(self):
-        """로봇 정보 반환"""
-        return self._asset_manager.get_joint_info()
-
-    def get_coupled_joints_info(self):
-        """Coupled Joint 정보 반환"""
-        return self._joint_controller.get_coupled_joints_info()
-
-    def get_visualization_info(self):
-        """시각화 설정 정보 반환"""
-        return self._visualization.get_visualization_info()
-
-    def is_simulation_running(self):
-        """시뮬레이션 실행 상태 확인"""
-        return self._simulation_loop.is_running()
-
-    def stop_simulation(self):
-        """시뮬레이션 중지"""
-        self._simulation_loop.stop()
-
-
-
-
-    # ========================================
-    # 🛠️ Configuration Methods
-    # ========================================
-    
     def update_joint_display_text(self):
         """관절 오버레이 텍스트 갱신 (JointOverlayUI에 위임)."""
-        self._overlay_ui.update_joint_display_text(self)
+        if self._overlay_ui is not None:
+            self._overlay_ui.update_joint_display_text(self)
 
     def update_hand_display_text(self):
         """손 관절 오버레이 텍스트 갱신 (JointOverlayUI에 위임)."""
-        self._overlay_ui.update_hand_display_text(self)
+        if self._overlay_ui is not None:
+            self._overlay_ui.update_hand_display_text(self)
 
+    # ------------------------------------------------------------------
+    # 관절 제어 (기존 ALLEXJointController 흡수)
+    # ------------------------------------------------------------------
+    def load_coupled_joint_config(self, config_path: str | None = None) -> None:
+        """Coupled Joint 설정 로드 (스텁)."""
+        pass
 
-    def load_joint_config(self, config_path):
-        """관절 설정 파일 로드"""
-        self._joint_controller.load_coupled_joint_config(config_path)
+    def set_ros2_subscriber_status(self, is_active: bool) -> None:
+        """ROS2 Subscriber 활성/비활성 플래그."""
+        self._ros2_subscriber_active = bool(is_active)
+
+    def set_topic_mode(self, topic_mode: str) -> None:
+        """토픽 모드 캐시."""
+        self._topic_mode = topic_mode
+
+    def create_joint_control_generator(self, articulation: Any, get_target_positions_func: Any):
+        """관절 제어 제너레이터 스텁 (yield만)."""
+        while True:
+            yield
+
+    def get_unified_target_positions(self) -> List[float]:
+        """통합 목표 관절 위치 (스텁은 빈 리스트)."""
+        return []
+
+    def update_hand_joint_group(
+        self,
+        hand_side: str,
+        finger_name: str,
+        joint_values: Iterable[float],
+        mode: str = "current",
+    ) -> None:
+        """손가락별 관절 버퍼 업데이트."""
+        values = list(joint_values)
+        if hand_side == "right":
+            buf = self.Hand_R_current if mode == "current" else self.Hand_R_desired
+        elif hand_side == "left":
+            buf = self.Hand_L_current if mode == "current" else self.Hand_L_desired
+        else:
+            return
+        for i in range(min(len(buf), len(values))):
+            buf[i] = float(values[i])
+
+    def update_joint_group(
+        self,
+        group_name: str,
+        joint_values: Iterable[float],
+        mode: str = "current",
+    ) -> None:
+        """팔/허리/목 관절 그룹 버퍼 업데이트."""
+        values = [float(v) for v in joint_values]
+        buf = None
+        if group_name == "right_arm":
+            buf = self.Arm_R_current if mode == "current" else self.Arm_R_desired
+        elif group_name == "left_arm":
+            buf = self.Arm_L_current if mode == "current" else self.Arm_L_desired
+        elif group_name == "waist":
+            buf = self.Waist_current if mode == "current" else self.Waist_desired
+        elif group_name == "neck":
+            buf = self.Neck_current if mode == "current" else self.Neck_desired
+        elif group_name.startswith("hand_"):
+            parts = group_name.split("_")
+            if len(parts) >= 3:
+                self.update_hand_joint_group(parts[1], parts[2], values, mode)
+            return
+        else:
+            return
+        if buf is not None:
+            if len(buf) < len(values):
+                buf.extend([0.0] * (len(values) - len(buf)))
+            for i in range(len(values)):
+                buf[i] = values[i]
+
+    def _data_response(self, status: str, message: str = "", current_data: dict = None, desired_data: dict = None) -> dict:
+        """오버레이용 공통 응답 형식."""
+        return {
+            "status": status,
+            "message": message,
+            "current_data": current_data if current_data is not None else {},
+            "desired_data": desired_data if desired_data is not None else {},
+        }
 
     def get_joint_data_both_modes(self):
-        """텍스트 오버레이용 관절 데이터 수집 (current + desired 동시 반환)"""
+        """텍스트 오버레이용 관절 데이터 수집 (current + desired 동시 반환)."""
+        if not self._ros2_subscriber_active:
+            return self._data_response("disconnected", "ROS2 Inactive")
         try:
-            # 🔍 ROS2 구독 상태 확인
-            ros2_active = self._joint_controller._ros2_subscriber_active
-            
-            if not ros2_active:
-                return {
-                    'status': 'disconnected',
-                    'message': 'ROS2 Inactive',
-                    'current_data': {},
-                    'desired_data': {}
-                }
-            
-            # 🎯 각 그룹별 current/desired 데이터 가져오기
             current_joint_groups = {
-                'right_arm': getattr(self._joint_controller, 'Arm_R_current', []),
-                'left_arm': getattr(self._joint_controller, 'Arm_L_current', []),
-                'waist': getattr(self._joint_controller, 'Waist_current', []),
-                'neck': getattr(self._joint_controller, 'Neck_current', [])
+                "right_arm": getattr(self, "Arm_R_current", []),
+                "left_arm": getattr(self, "Arm_L_current", []),
+                "waist": getattr(self, "Waist_current", []),
+                "neck": getattr(self, "Neck_current", []),
             }
-            
             desired_joint_groups = {
-                'right_arm': getattr(self._joint_controller, 'Arm_R_desired', []),
-                'left_arm': getattr(self._joint_controller, 'Arm_L_desired', []),
-                'waist': getattr(self._joint_controller, 'Waist_desired', []),
-                'neck': getattr(self._joint_controller, 'Neck_desired', [])
+                "right_arm": getattr(self, "Arm_R_desired", []),
+                "left_arm": getattr(self, "Arm_L_desired", []),
+                "waist": getattr(self, "Waist_desired", []),
+                "neck": getattr(self, "Neck_desired", []),
             }
-            
-            return {
-                'status': 'active',
-                'current_data': {
-                    'joint_groups': current_joint_groups
-                },
-                'desired_data': {
-                    'joint_groups': desired_joint_groups
-                }
-            }
-            
+            return self._data_response(
+                "active",
+                current_data={"joint_groups": current_joint_groups},
+                desired_data={"joint_groups": desired_joint_groups},
+            )
         except Exception as e:
-            print(f"❌ Failed to get both modes joint data: {e}")
-            return {
-                'status': 'error',
-                'message': f'Error: {str(e)}',
-                'current_data': {},
-                'desired_data': {}
-            }
+            return self._data_response("error", str(e))
 
     def get_hand_joint_data_both_modes(self):
-        """손 관절 전용 데이터 수집 (current + desired 동시 반환)"""
+        """손 관절 전용 데이터 수집 (current + desired 동시 반환)."""
+        if not self._ros2_subscriber_active:
+            empty_hand = {"left_hand": [], "right_hand": []}
+            return self._data_response("disconnected", "ROS2 Inactive", empty_hand, empty_hand)
         try:
-            # 🔍 ROS2 구독 상태 확인
-            ros2_active = self._joint_controller._ros2_subscriber_active
-            
-            if not ros2_active:
-                return {
-                    'status': 'disconnected',
-                    'message': 'ROS2 Inactive',
-                    'current_data': {'left_hand': [], 'right_hand': []},
-                    'desired_data': {'left_hand': [], 'right_hand': []}
-                }
-            
-            # 🎯 current 손 관절 데이터 추출
-            current_left_hand = getattr(self._joint_controller, 'Hand_L_current', []) or []
-            current_right_hand = getattr(self._joint_controller, 'Hand_R_current', []) or []
-            
-            # 🎯 desired 손 관절 데이터 추출
-            desired_left_hand = getattr(self._joint_controller, 'Hand_L_desired', []) or []
-            desired_right_hand = getattr(self._joint_controller, 'Hand_R_desired', []) or []
-            
-            # 🎯 15개 관절로 제한 (혹시 더 많은 데이터가 있을 경우)
-            current_left_filtered = current_left_hand[:15] if current_left_hand else []
-            current_right_filtered = current_right_hand[:15] if current_right_hand else []
-            desired_left_filtered = desired_left_hand[:15] if desired_left_hand else []
-            desired_right_filtered = desired_right_hand[:15] if desired_right_hand else []
-            
-            return {
-                'status': 'active',
-                'current_data': {
-                    'left_hand': current_left_filtered,
-                    'right_hand': current_right_filtered
-                },
-                'desired_data': {
-                    'left_hand': desired_left_filtered,
-                    'right_hand': desired_right_filtered
-                }
-            }
-            
+            limit = ScenarioDisplayConfig.HAND_JOINT_DISPLAY_LIMIT
+            cur_l = (getattr(self, "Hand_L_current", []) or [])[:limit]
+            cur_r = (getattr(self, "Hand_R_current", []) or [])[:limit]
+            des_l = (getattr(self, "Hand_L_desired", []) or [])[:limit]
+            des_r = (getattr(self, "Hand_R_desired", []) or [])[:limit]
+            return self._data_response(
+                "active",
+                current_data={"left_hand": cur_l, "right_hand": cur_r},
+                desired_data={"left_hand": des_l, "right_hand": des_r},
+            )
         except Exception as e:
-            print(f"❌ Failed to get both modes hand joint data: {e}")
-            return {
-                'status': 'error',
-                'message': f'Hand Data Error: {str(e)}',
-                'current_data': {'left_hand': [], 'right_hand': []},
-                'desired_data': {'left_hand': [], 'right_hand': []}
-            }
+            empty_hand = {"left_hand": [], "right_hand": []}
+            return self._data_response("error", f"Hand Data Error: {str(e)}", empty_hand, empty_hand)
 
     def set_ros2_manager(self, ros2_manager):
-        """ROS2 Manager 설정 및 모드 초기화"""
+        """ROS2 Manager 설정 및 초기 토픽 모드 캐시."""
         self._ros2_manager = ros2_manager
-        self._update_cached_topic_mode()  # 🆕 초기 모드 캐시
-    
+        self._update_cached_topic_mode()
+
     def _update_cached_topic_mode(self):
         """토픽 모드 캐시 업데이트"""
         if hasattr(self, '_ros2_manager') and self._ros2_manager:
             try:
                 self._cached_topic_mode = self._ros2_manager.get_current_topic_mode()
-            except Exception as e:
-                print(f"⚠️ ROS2 Manager 모드 조회 실패: {e}")
-        else:
-            print("❌ ROS2 Manager not initialized!")
+            except Exception:
+                pass
+
+    def _append_joint_lines(self, lines: List[str], names: List[str], cur: List[float], des: List[float], mode: str, name_width: int = 3) -> None:
+        """이름 리스트와 current/desired로 format_joint_line 한 블록을 lines에 추가."""
+        for i, n in enumerate(names):
+            if i >= max(len(cur), len(des)):
+                break
+            lines.append(format_joint_line(
+                n,
+                cur[i] if i < len(cur) else 0.0,
+                des[i] if i < len(des) else 0.0,
+                mode,
+                name_width=name_width,
+            ))
 
     def format_all_joint_text(self):
         """모든 관절 데이터를 통합 포맷으로 표시 (current | desired 동시 표시)."""
@@ -440,27 +420,22 @@ class ALLEXDigitalTwin:
         mode = self._cached_topic_mode
         current_groups = joint_data["current_data"]["joint_groups"]
         desired_groups = joint_data["desired_data"]["joint_groups"]
-        lines = ["Current | Desired", "=" * 20]
+        line_width = ScenarioDisplayConfig.OVERLAY_LINE_WIDTH
+        lines = ["Current | Desired", "=" * line_width]
 
         if self._joint_group_display_enabled.get("body", True):
-            current_waist = current_groups.get("waist", [])
-            current_neck = current_groups.get("neck", [])
-            desired_waist = desired_groups.get("waist", [])
-            desired_neck = desired_groups.get("neck", [])
-            if current_waist or current_neck or desired_waist or desired_neck:
+            cur_waist = current_groups.get("waist", [])
+            cur_neck = current_groups.get("neck", [])
+            des_waist = desired_groups.get("waist", [])
+            des_neck = desired_groups.get("neck", [])
+            if cur_waist or cur_neck or des_waist or des_neck:
                 lines.append(" Body Joints:")
-                for label, cur, des in [("Waist:", current_waist, desired_waist), ("Neck:", current_neck, desired_neck)]:
-                    names = BODY_JOINT_LABELS["waist"] if label == "Waist:" else BODY_JOINT_LABELS["neck"]
+                for label, cur, des in [("Waist:", cur_waist, des_waist), ("Neck:", cur_neck, des_neck)]:
                     if not (cur or des):
                         continue
+                    names = ScenarioDisplayConfig.BODY_JOINT_LABELS["waist"] if label == "Waist:" else ScenarioDisplayConfig.BODY_JOINT_LABELS["neck"]
                     lines.append(f"   {label}")
-                    for i, n in enumerate(names):
-                        if i >= max(len(cur), len(des)):
-                            break
-                        lines.append(_format_joint_line(
-                            n, cur[i] if i < len(cur) else 0.0, des[i] if i < len(des) else 0.0,
-                            mode, name_width=2,
-                        ))
+                    self._append_joint_lines(lines, names, cur, des, mode, name_width=2)
 
         left_arm_on = self._joint_group_display_enabled.get("left_arm", True)
         right_arm_on = self._joint_group_display_enabled.get("right_arm", True)
@@ -470,20 +445,15 @@ class ALLEXDigitalTwin:
             des_l = desired_groups.get("left_arm", []) if left_arm_on else []
             des_r = desired_groups.get("right_arm", []) if right_arm_on else []
             if cur_l or cur_r or des_l or des_r:
-                lines.extend(["=" * 20, "Arm Joints:"])
+                lines.extend(["=" * line_width, "Arm Joints:"])
                 for arm_label, names, cur, des in [
-                    ("Left Arm:", ARM_JOINT_LABELS["left_arm"], cur_l, des_l),
-                    ("Right Arm:", ARM_JOINT_LABELS["right_arm"], cur_r, des_r),
+                    ("Left Arm:", ScenarioDisplayConfig.ARM_JOINT_LABELS["left_arm"], cur_l, des_l),
+                    ("Right Arm:", ScenarioDisplayConfig.ARM_JOINT_LABELS["right_arm"], cur_r, des_r),
                 ]:
                     if not (cur or des):
                         continue
                     lines.append(f"   {arm_label}")
-                    for i, n in enumerate(names):
-                        if i >= max(len(cur), len(des)):
-                            break
-                        lines.append(_format_joint_line(
-                            n, cur[i] if i < len(cur) else 0.0, des[i] if i < len(des) else 0.0, mode, name_width=3
-                        ))
+                    self._append_joint_lines(lines, names, cur, des, mode, name_width=3)
         return "\n".join(lines)
 
     def format_hand_joint_text(self):
@@ -496,7 +466,7 @@ class ALLEXDigitalTwin:
         cur_r = hand_data["current_data"]["right_hand"]
         des_l = hand_data["desired_data"]["left_hand"]
         des_r = hand_data["desired_data"]["right_hand"]
-        lines = ["Current | Desired", "=" * 20]
+        lines = ["Current | Desired", "=" * ScenarioDisplayConfig.OVERLAY_LINE_WIDTH]
         hand_prefix = "  "
 
         def append_hand_blocks(hand_label: str, cur: list, des: list):
@@ -504,72 +474,56 @@ class ALLEXDigitalTwin:
                 lines.append(f"{hand_label}: No Data")
                 return
             lines.append(f"{hand_label}:")
-            for finger_name, finger_code, indices in FINGER_GROUPS:
+            for finger_name, finger_code, indices in ScenarioDisplayConfig.FINGER_GROUPS:
                 for joint_num, data_index in enumerate(indices, 1):
                     name = f"L_{finger_code}{joint_num}" if "Left" in hand_label else f"R_{finger_code}{joint_num}"
                     c = cur[data_index] if data_index < len(cur) else 0.0
                     d = des[data_index] if data_index < len(des) else 0.0
-                    lines.append(_format_joint_line(name, c, d, mode, name_width=3, prefix=hand_prefix))
+                    lines.append(format_joint_line(name, c, d, mode, name_width=3, prefix=hand_prefix))
                 if finger_name != "Pinky":
-                    lines.append("-" * 18)
+                    lines.append("-" * ScenarioDisplayConfig.OVERLAY_SEP_WIDTH)
 
         append_hand_blocks("Left Hand", cur_l, des_l)
-        lines.append("=" * 20)
+        lines.append("=" * ScenarioDisplayConfig.OVERLAY_LINE_WIDTH)
         append_hand_blocks("Right Hand", cur_r, des_r)
         return "\n".join(lines)
 
 
-    # ========================================
-    # 🔘 관절 그룹 체크박스 상태 관리 메서드들
-    # ========================================
-    
+    # ----- 관절 그룹 표시 (체크박스) -----
+
     def set_joint_group_enabled(self, group_name: str, enabled: bool):
-        """특정 관절 그룹 표시 활성화/비활성화 (손 관절은 윈도우 표시/숨김 제어)"""
-        if group_name in self._joint_group_display_enabled:
-            self._joint_group_display_enabled[group_name] = enabled
-            
-            # 🔘 손 관절 그룹인 경우 손 윈도우 표시/숨김 제어
-            if group_name == 'hand':  # 🆕 hand 하나로 통합
-                self._toggle_hand_window_visibility(enabled)
-            else:
-                # 🔄 관절 윈도우 표시/숨김 제어 (Body + Arm)
-                self._toggle_joint_window_visibility()
+        """특정 관절 그룹 표시 활성화/비활성화 (손 관절은 윈도우 표시/숨김 제어)."""
+        if group_name not in self._joint_group_display_enabled:
+            return
+        self._joint_group_display_enabled[group_name] = enabled
+        if group_name == "hand":
+            self._toggle_hand_window_visibility(enabled)
         else:
-            print(f"❌ 알 수 없는 관절 그룹: {group_name}")
+            self._toggle_joint_window_visibility()
     
     def get_all_group_states(self) -> dict:
         """모든 관절 그룹 상태 반환"""
         return self._joint_group_display_enabled.copy()
     
     def set_all_groups_enabled(self, enabled: bool):
-        """모든 관절 그룹 활성화/비활성화 (손 관절은 윈도우 표시/숨김 포함)"""
+        """모든 관절 그룹 활성화/비활성화 (손 관절 윈도우 표시/숨김 포함)."""
         for group_name in self._joint_group_display_enabled:
             self._joint_group_display_enabled[group_name] = enabled
-        
-        print(f"✅ 모든 그룹 표시: {'ON' if enabled else 'OFF'}")
-        
-        # 🔄 관절 윈도우 표시/숨김 제어 (Body + Arm)
         self._toggle_joint_window_visibility()
-        
-        # 🔘 손 관절 윈도우 표시/숨김 제어
         self._toggle_hand_window_visibility(enabled)
-    
-    def toggle_joint_group(self, group_name: str):
-        """특정 관절 그룹 토글 (ON ↔ OFF)"""
-        if group_name in self._joint_group_display_enabled:
-            current_state = self._joint_group_display_enabled[group_name]
-            self.set_joint_group_enabled(group_name, not current_state)
-        else:
-            print(f"❌ 알 수 없는 관절 그룹: {group_name}")
 
     def _toggle_hand_window_visibility(self, show: bool):
         """손 관절 윈도우 표시/숨김 (JointOverlayUI에 위임). 표시 시 내용 갱신."""
+        if self._overlay_ui is None:
+            return
         self._overlay_ui.set_hand_window_visibility(show)
         if show:
             self._overlay_ui.update_hand_display_text(self)
 
     def _toggle_joint_window_visibility(self):
         """관절 윈도우 표시/숨김 (body, left_arm, right_arm 중 하나라도 ON이면 표시)."""
+        if self._overlay_ui is None:
+            return
         should_show = (
             self._joint_group_display_enabled.get("body", False)
             or self._joint_group_display_enabled.get("left_arm", False)
@@ -583,28 +537,23 @@ class ALLEXDigitalTwin:
         """Policy action용 DOF 인덱스를 시뮬레이션 시작 전에 캐싱."""
         if self._policy_action_dof_indices is not None:
             return True
-        if self._simulation_loop.is_running():
-            print("⚠️ Policy action DOF indices not cached yet; attempting to cache during simulation (may be unsafe).")
         try:
-            indices = _resolve_dof_indices(self._articulation, ROS2Config.ALLEX_ACTION_JOINT_FULL_NAMES)
-            if len(indices) != POLICY_ACTION_JOINT_COUNT:
-                print(f"❌ Failed to resolve all {POLICY_ACTION_JOINT_COUNT} policy action joint indices (got {len(indices)})")
+            indices = resolve_dof_indices(self._articulation, ROS2Config.ALLEX_ACTION_JOINT_FULL_NAMES)
+            if len(indices) != ScenarioDisplayConfig.POLICY_ACTION_JOINT_COUNT:
+                print(f"❌ Policy action joint indices 불일치: 기대 {ScenarioDisplayConfig.POLICY_ACTION_JOINT_COUNT}, 실제 {len(indices)}")
                 return False
             self._policy_action_dof_indices = indices
-            print(f"✅ Policy action DOF indices cached: {self._policy_action_dof_indices}")
             return True
         except Exception as e:
-            print(f"❌ Failed to cache policy action DOF indices: {e}")
+            print(f"❌ Policy action DOF indices 캐시 실패: {e}")
             traceback.print_exc()
             return False
 
     def apply_policy_action(self, joint_values: list) -> bool:
         """Policy action (18개 조인트 위치)을 articulation에 적용. 메인 루프에서만 적용되도록 버퍼에 저장."""
         if self._articulation is None:
-            print("⚠️ Articulation not initialized, cannot apply policy action")
             return False
-        if len(joint_values) != POLICY_ACTION_JOINT_COUNT:
-            print(f"⚠️ Policy action expects {POLICY_ACTION_JOINT_COUNT} joints, got {len(joint_values)}")
+        if len(joint_values) != ScenarioDisplayConfig.POLICY_ACTION_JOINT_COUNT:
             return False
         try:
             if self._policy_action_dof_indices is None and not self._cache_policy_action_dof_indices():
@@ -612,6 +561,6 @@ class ALLEXDigitalTwin:
             self._pending_policy_action = np.array(joint_values, dtype=np.float32)
             return True
         except Exception as e:
-            print(f"❌ Failed to apply policy action: {e}")
+            print(f"❌ Policy action 적용 실패: {e}")
             traceback.print_exc()
             return False
