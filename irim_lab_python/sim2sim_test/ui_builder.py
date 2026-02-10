@@ -170,6 +170,7 @@ class UIBuilder:
             self._scenario.set_all_groups_enabled(False)
             self._sync_checkboxes_to_scenario()
 
+
     _GROUP_KEY_TO_CHECKBOX_LABEL = {"body": "Body", "left_arm": "Left Arm", "right_arm": "Right Arm", "hand": "Hand"}
 
     def _sync_checkboxes_to_scenario(self):
@@ -180,6 +181,27 @@ class UIBuilder:
             if checkbox_text in self._joint_group_checkboxes:
                 current_state = group_states.get(group_key, False)
                 self._joint_group_checkboxes[checkbox_text].model.set_value(current_state)
+
+    # ----- Sim2sim Deploy -----
+    def _build_sim2sim_deploy(self):
+        sim2sim_frame = CollapsableFrame("Sim2sim Deploy", collapsed=UIConfig.JOINT_CONTROL_COLLAPSED)
+        with sim2sim_frame:
+            with ui.VStack(style=get_style(), spacing=UILayout.SPACING_SMALL, height=0):
+                create_styled_button(
+                    "Open Sim2Real Debugger",
+                    callback=self._on_open_sim2real_debugger,
+                    color_scheme="green",
+                    height=UILayout.BUTTON_HEIGHT,
+                )
+
+    def _on_open_sim2real_debugger(self):
+        try:
+            from .sim2sim_console.sim2real_debugger_gui import show_debugger
+            show_debugger()
+        except Exception as e:
+            import traceback
+            print(f"Sim2Real Debugger GUI 실행 실패: {e}")
+            traceback.print_exc()
 
     # ----- 오버레이 윈도우 (관절/손 텍스트) — scenario가 self를 overlay_ui로 사용 -----
     _OVERLAY_LABEL_STYLE = {"color": UIColors.TEXT_PRIMARY, "font_size": OverlayConfig.FONT_SIZE, "margin": OverlayConfig.LABEL_MARGIN, "word_wrap": False}
@@ -376,6 +398,7 @@ class UIBuilder:
     def build_ui(self):
         self._build_world_controls()
         self._build_joint_controls()
+        self._build_sim2sim_deploy()
 
     # ----- 시나리오 (LOAD / Reset / RUN) -----
     def _setup_scene(self):

@@ -13,6 +13,15 @@ logging.basicConfig(
 )
 
 
+def show_debugger() -> None:
+    """Isaac Sim 등 기존 앱 내부에서 디버거 창만 띄울 때 사용. app.exec()/sys.exit 호출 없음."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    window = Sim2RealDebugger()
+    window.show()
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     window = Sim2RealDebugger()
