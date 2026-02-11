@@ -31,7 +31,7 @@ class JointConfig:
 class SimulationConfig:
     """시뮬레이션 타임스텝·중력 등 월드 설정."""
     SIMULATION_HZ = 50
-    PHYSICS_DT = 1.0 / SIMULATION_HZ
+    PHYSICS_DT = 1.0 / 200
     RENDERING_DT = 1.0 / SIMULATION_HZ
     GRAVITY = [0, 0, -9.81]
 
