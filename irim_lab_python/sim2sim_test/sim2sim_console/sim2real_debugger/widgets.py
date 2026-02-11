@@ -20,7 +20,7 @@ from .config import ObsDict
 
 
 class DropZone(QFrame):
-    """Drag-and-drop zone for policy (.pt/.pth) and trajectory (.npz) files."""
+    """Drag-and-drop zone: policy (.pt/.pth), trajectory (.npz), env/agent (.yaml/.yml)."""
 
     files_dropped = Signal(list)
 
@@ -37,11 +37,15 @@ class DropZone(QFrame):
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet("font-size: 32px; font-weight: bold; color: #e0e0e0;")
         layout.addWidget(lbl)
+        hint = QLabel(".pt / .pth / .npz / .yaml")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet("font-size: 11px; color: #888;")
+        layout.addWidget(hint)
 
     @staticmethod
     def _is_supported(path: str) -> bool:
         p = path.lower()
-        return p.endswith((".pt", ".pth", ".npz"))
+        return p.endswith((".pt", ".pth", ".npz", ".yaml", ".yml"))
 
     def _set_idle_style(self) -> None:
         self.setStyleSheet("QFrame { background-color: #333; border: 2px dashed #777; border-radius: 10px; }")

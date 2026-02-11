@@ -55,8 +55,6 @@ class DebuggerConfig:
     action_dim: int = 19  # 상한: 18 joint + 1 playback_speed. 실제는 로드된 모델 출력 차원(보통 18) 사용
     # UI 갱신 주기(Hz). 액션 계산 주기와 분리.
     update_hz: int = 30
-    # 액션 계산/퍼블리시 주기(Hz). 학습 control rate(50Hz)에 맞춤.
-    control_hz: int = 50
     buffer_size: int = 200
     plot_update_hz: int = 30
     # 인퍼런스 최대 수행 시간 (초) - 0이면 무제한

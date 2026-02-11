@@ -15,6 +15,9 @@ from .policy import PolicyWrapper
 
 LOG = logging.getLogger(__name__)
 
+# 점진적 리셋 완료 판정: 이 각도(rad) 이하면 완료
+RESET_DONE_THRESHOLD_RAD = 0.01
+
 
 class InferenceEngine:
     """trajectory playback + obs packing + policy forward + action/ref_error injection"""
@@ -48,9 +51,9 @@ class InferenceEngine:
         # streaming freshness checker (canonical name 기준)
         self.is_fresh_cb: Optional[Callable[[str], bool]] = None
 
-        # 직전 스텝에 적용된 관절 위치 18차원 (obs "last_actions" 용, 학습과 동일하게 action_manager.action만)
+        # obs "last_actions" 용: Isaac Lab과 동일하게 action_manager.action = policy 출력(raw residual) 18차원
         self._last_actions: Optional[np.ndarray] = None
-        # last_actions history: 최근 3개 스텝의 18차원 관절 위치 → concat 시 54차원
+        # last_actions history: 최근 3스텝 raw residual 18차원 → concat 54차원
         self._action_history: list[np.ndarray] = []
         self._history_length: int = 3  # 학습 시 PolicyCfg.history_length와 동일
         self._last_actions_obs_dim: int = 18  # num_joints, 학습 last_action과 동일
@@ -60,6 +63,8 @@ class InferenceEngine:
         self._speed_max: float = 1.2
         # inference 중 stop할 때 유지할 마지막 publish된 action (ref + residual*scale)
         self._last_published_action: Optional[np.ndarray] = None
+        # 터미널 로그용: 마지막 policy 출력(raw_actions, scale 적용 전)
+        self._last_raw_actions_for_log: Optional[np.ndarray] = None
         # 초기 자세로 점진적 리셋 관련 상태
         self._is_resetting: bool = False
         self._reset_start_pose: Optional[np.ndarray] = None  # 리셋 시작 시점의 관절 위치
@@ -101,14 +106,14 @@ class InferenceEngine:
         self._last_ref_frame = None
         self._streaming_cache.clear()
         self._last_obs_vec = None
-        # 학습과 동일: last_actions obs는 18차원 관절 위치만 (54차원 = 18*3)
+        # last_actions obs = raw residual history (학습과 동일: action_manager.action)
         self._last_actions = None
-        self._last_published_action = None  # inference 시작 시 초기화
-        self._is_resetting = False  # inference 시작 시 리셋 상태 초기화
+        self._last_published_action = None
+        self._last_raw_actions_for_log = None
+        self._is_resetting = False
         self._reset_start_pose = None
-        # last_actions obs: 학습과 동일하게 18차원 관절 위치만 history (54차원)
-        init_action_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-        self._action_history = [init_action_18.copy() for _ in range(self._history_length)]
+        zero_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
+        self._action_history = [zero_18.copy() for _ in range(self._history_length)]
 
     def stop(self) -> None:
         self.running = False
@@ -122,20 +127,53 @@ class InferenceEngine:
 
     def reset_to_init_pose(self) -> None:
         """초기 자세로 점진적 리셋 시작: 현재 위치에서 초기 자세로 천천히 이동."""
-        # 현재 관절 위치를 시작점으로 설정 (다음 step_and_inject에서 joint_pos를 받아서 설정)
-        # 일단 _last_published_action을 시작점으로 사용 (없으면 초기 자세)
         if self._last_published_action is not None and self._last_published_action.size == self.cfg.num_joints:
             self._reset_start_pose = self._last_published_action.copy()
         else:
-            # 현재 위치를 모를 경우 초기 자세로 바로 설정
-            init_pose = np.array(ALLEX_INIT_POSE, dtype=np.float32)
-            if init_pose.size != self.cfg.num_joints:
-                init_pose = np.zeros(self.cfg.num_joints, dtype=np.float32)
-            self._reset_start_pose = init_pose.copy()
-        
+            self._reset_start_pose = self._get_init_pose().copy()
         self._is_resetting = True
-        # action history 버퍼는 리셋하지 않음 (현재 상태 유지)
         LOG.info("Starting gradual reset to initial pose")
+
+    def _get_init_pose(self) -> np.ndarray:
+        """초기 자세 18차원 (num_joints에 맞춤)."""
+        out = np.array(ALLEX_INIT_POSE, dtype=np.float32)
+        if out.size != self.cfg.num_joints:
+            out = np.zeros(self.cfg.num_joints, dtype=np.float32)
+        return out
+
+    def _last_actions_vec(self, default_18: Optional[np.ndarray] = None) -> np.ndarray:
+        """last_actions obs 54차원: _action_history가 가득 차 있으면 concat, 아니면 default_18 또는 zero로 패딩."""
+        if len(self._action_history) == self._history_length:
+            return np.concatenate(self._action_history, axis=0).astype(np.float32)
+        zero = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
+        filler = default_18 if (default_18 is not None and default_18.size == self._last_actions_obs_dim) else zero
+        need = self._history_length - len(self._action_history)
+        parts = list(self._action_history) + [filler] * need
+        return np.concatenate(parts, axis=0).astype(np.float32)
+
+    def _publish_actions(self, actions_18: np.ndarray, last_actions_54: np.ndarray) -> None:
+        if self.publish_action_cb is not None:
+            self.publish_action_cb(actions_18)
+        if self.publish_last_action_cb is not None:
+            self.publish_last_action_cb(last_actions_54)
+
+    def _get_joint_pos(self, data: ObsDict) -> Optional[np.ndarray]:
+        """data에서 joint_pos 추출 (freshness·크기 검사)."""
+        if "joint_pos" not in data:
+            return None
+        if self.is_fresh_cb is not None and not self.is_fresh_cb("joint_pos"):
+            return None
+        jp = np.asarray(data["joint_pos"], dtype=np.float32).reshape(-1)
+        return jp if jp.size == self.cfg.num_joints else None
+
+    def _push_action_history(self, action_18: Optional[np.ndarray]) -> None:
+        """한 프레임(18차원)을 action history에 넣고 길이 유지."""
+        if action_18 is not None and action_18.size == self._last_actions_obs_dim:
+            self._action_history.append(action_18.copy())
+        else:
+            self._action_history.append(np.zeros(self._last_actions_obs_dim, dtype=np.float32))
+        if len(self._action_history) > self._history_length:
+            self._action_history.pop(0)
 
     def _pack_obs(self, data: ObsDict) -> Optional[np.ndarray]:
         obs = np.empty((EXPECTED_TOTAL_OBS_DIM,), dtype=np.float32)
@@ -206,29 +244,13 @@ class InferenceEngine:
         return ref_frame
 
     def step_and_inject(self, data: ObsDict, dt: float) -> None:
-        """원본 동작 유지:
-        - trajectory가 있으면 actions 주입
-        - running=False: last_actions=0
-        - running=True: actions=ref + residual*scale, ref_error=joint_pos-actions (가능할 때)
-        추가: obs["last_actions"]에는 직전 스텝에 적용된 action을 넣어 학습 시 last_action과 일치시킴.
-        추가: inference가 안 돌아가도 대시보드가 켜져있으면 초기 자세(init pose) action을 계속 publish (ROS 토픽 유지).
-        """
-        # inference가 안 돌아가는 경우에도 초기 자세를 publish하여 ROS 토픽이 계속 유지되도록 함
-        init_pose_actions = np.array(ALLEX_INIT_POSE, dtype=np.float32)
-        if init_pose_actions.size != self.cfg.num_joints:
-            # 안전장치: 크기가 맞지 않으면 0 벡터로 대체
-            init_pose_actions = np.zeros(self.cfg.num_joints, dtype=np.float32)
-        
+        """trajectory 있으면 actions 주입; running=False면 last_actions=0 또는 유지; 항상 init pose publish로 토픽 유지."""
+        init_pose = self._get_init_pose()
+
         if self.trajectory is None:
-            # trajectory가 없어도 초기 자세를 publish (대시보드가 켜져있으면 토픽 유지)
-            # last_actions: 학습과 동일 18*3=54차원
-            zero_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-            last_actions_history = np.concatenate([zero_18] * self._history_length, axis=0).astype(np.float32)
-            if self.publish_action_cb is not None:
-                self.publish_action_cb(init_pose_actions)
-            if self.publish_last_action_cb is not None:
-                self.publish_last_action_cb(last_actions_history)
-            data["last_actions"] = last_actions_history
+            last_54 = np.zeros(self._last_actions_obs_dim * self._history_length, dtype=np.float32)
+            data["last_actions"] = last_54
+            self._publish_actions(init_pose, last_54)
             return
 
         # 최대 duration 초과 시 인퍼런스 자동 종료
@@ -243,188 +265,76 @@ class InferenceEngine:
                 return
 
         if not self.running:
-            # 초기 자세로 점진적 리셋 중인 경우
             if self._is_resetting:
-                # 현재 관절 위치를 확인 (가능하면)
-                current_pose = None
-                if "joint_pos" in data:
-                    ok = True
-                    if self.is_fresh_cb is not None:
-                        ok = self.is_fresh_cb("joint_pos")
-                    if ok:
-                        jp = np.asarray(data["joint_pos"], dtype=np.float32).reshape(-1)
-                        if jp.size == self.cfg.num_joints:
-                            current_pose = jp
-                
-                # 현재 위치를 모르면 마지막 publish된 action 사용
+                current_pose = self._get_joint_pos(data)
+                if current_pose is None and self._last_published_action is not None and self._last_published_action.size == self.cfg.num_joints:
+                    current_pose = self._last_published_action.copy()
+                if current_pose is None and self._reset_start_pose is not None:
+                    current_pose = self._reset_start_pose.copy()
                 if current_pose is None:
-                    if self._last_published_action is not None and self._last_published_action.size == self.cfg.num_joints:
-                        current_pose = self._last_published_action.copy()
-                    elif self._reset_start_pose is not None:
-                        current_pose = self._reset_start_pose.copy()
-                    else:
-                        current_pose = init_pose_actions.copy()
-                
-                # 시작 위치가 아직 설정되지 않았으면 현재 위치를 시작점으로 설정
+                    current_pose = init_pose.copy()
                 if self._reset_start_pose is None:
                     self._reset_start_pose = current_pose.copy()
-                
-                # 현재 위치에서 초기 자세로 점진적으로 보간
-                target_pose = init_pose_actions
-                diff = target_pose - current_pose
-                max_diff = np.max(np.abs(diff))
-                
-                # 거리가 충분히 가까우면 완료
-                if max_diff < 0.01:  # 0.01 rad (약 0.57도) 이하면 완료
-                    actions_to_publish = target_pose.copy()
+
+                diff = init_pose - current_pose
+                if np.max(np.abs(diff)) < RESET_DONE_THRESHOLD_RAD:
+                    actions_to_publish = init_pose.copy()
                     self._is_resetting = False
                     self._reset_start_pose = None
-                    self._last_published_action = actions_to_publish.copy()
                     LOG.info("Reset to initial pose completed")
                 else:
-                    # 일정 비율씩 이동
-                    actions_to_publish = current_pose + diff * self._reset_speed
-                    self._last_published_action = actions_to_publish.copy()
-                
-                # last_actions: 학습과 동일 18*3=54차원
-                if len(self._action_history) == self._history_length:
-                    last_actions_history = np.concatenate(self._action_history, axis=0).astype(np.float32)
-                else:
-                    last_actions_history = np.concatenate([actions_to_publish] * self._history_length, axis=0).astype(np.float32)
-                data["last_actions"] = last_actions_history
-                if self.publish_action_cb is not None:
-                    self.publish_action_cb(actions_to_publish)
-                if self.publish_last_action_cb is not None:
-                    self.publish_last_action_cb(last_actions_history)
+                    actions_to_publish = (current_pose + diff * self._reset_speed).astype(np.float32, copy=False)
+                self._last_published_action = actions_to_publish.copy()
+                last_54 = np.zeros(self._last_actions_obs_dim * self._history_length, dtype=np.float32)
+                data["last_actions"] = last_54
+                self._publish_actions(actions_to_publish, last_54)
                 return
-            
-            # 리셋 중이 아닌 경우: 기존 로직
-            # inference가 실행 중이었다가 stop한 경우: 마지막 publish된 action 유지
-            # 그 외의 경우 (처음부터 inference가 안 돌아간 경우): 초기 자세 사용
-            if self._last_published_action is not None and self._last_published_action.size == self.cfg.num_joints:
-                # inference 중 stop한 경우: 마지막 액션 유지
-                actions_to_publish = self._last_published_action.astype(np.float32, copy=False)
-            else:
-                # 처음부터 inference가 안 돌아간 경우: 초기 자세 사용
-                actions_to_publish = init_pose_actions
-            
-            # last_actions: 학습과 동일 18*3=54차원
-            if len(self._action_history) == self._history_length:
-                last_actions_history = np.concatenate(self._action_history, axis=0).astype(np.float32)
-            else:
-                if actions_to_publish.size == self.cfg.num_joints:
-                    last_actions_history = np.concatenate([actions_to_publish] * self._history_length, axis=0).astype(np.float32)
-                else:
-                    zero_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-                    last_actions_history = np.concatenate([zero_18] * self._history_length, axis=0).astype(np.float32)
-            data["last_actions"] = last_actions_history
-            
+
+            actions_to_publish = (
+                self._last_published_action.astype(np.float32, copy=False)
+                if self._last_published_action is not None and self._last_published_action.size == self.cfg.num_joints
+                else init_pose
+            )
+            last_54 = np.zeros(self._last_actions_obs_dim * self._history_length, dtype=np.float32)
+            data["last_actions"] = last_54
             self._last_actions = None
-            # inference가 안 돌아가도 마지막 액션 또는 초기 자세를 publish하여 토픽 유지
-            if self.publish_action_cb is not None:
-                self.publish_action_cb(actions_to_publish)
-            if self.publish_last_action_cb is not None:
-                self.publish_last_action_cb(last_actions_history)
+            self._publish_actions(actions_to_publish, last_54)
             return
 
         ref = self._ref_action(dt)
         if ref is None:
-            # ref가 없어도 초기 자세를 publish하여 토픽 유지
-            zero_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-            last_actions_history = np.concatenate([zero_18] * self._history_length, axis=0).astype(np.float32)
-            if self.publish_action_cb is not None:
-                self.publish_action_cb(init_pose_actions)
-            if self.publish_last_action_cb is not None:
-                self.publish_last_action_cb(last_actions_history)
-            data["last_actions"] = last_actions_history
+            last_54 = np.zeros(self._last_actions_obs_dim * self._history_length, dtype=np.float32)
+            data["last_actions"] = last_54
+            self._publish_actions(init_pose, last_54)
             return
-        # loop=False일 때 trajectory가 끝나도 즉시 stop하지 않음 (학습과 동일하게 마지막 프레임 유지)
-        # Duration에 도달하거나 사용자가 수동으로 Stop할 때까지 inference 계속
-        # 참고: _ref_action()에서 이미 _trajectory_finished=True가 설정되고 마지막 프레임을 반환함
 
-        # joint_pos 확보 (freshness 고려)
-        joint_pos = None
-        if "joint_pos" in data:
-            ok = True
-            if self.is_fresh_cb is not None:
-                ok = self.is_fresh_cb("joint_pos")
-            if ok:
-                jp = np.asarray(data["joint_pos"], dtype=np.float32).reshape(-1)
-                if jp.size == self.cfg.num_joints:
-                    joint_pos = jp
-
-        # obs packing용 last_actions: 학습과 동일 18*3=54차원 (직전 3스텝의 적용된 관절 위치)
-        if self._last_actions is not None and self._last_actions.size == self._last_actions_obs_dim:
-            self._action_history.append(self._last_actions.copy())
-            if len(self._action_history) > self._history_length:
-                self._action_history.pop(0)
-        else:
-            zero_18 = np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-            self._action_history.append(zero_18)
-            if len(self._action_history) > self._history_length:
-                self._action_history.pop(0)
-        
-        if len(self._action_history) == self._history_length:
-            data["last_actions"] = np.concatenate(self._action_history, axis=0).astype(np.float32)
-        else:
-            padded_history = self._action_history + [
-                np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-                for _ in range(self._history_length - len(self._action_history))
-            ]
-            data["last_actions"] = np.concatenate(padded_history, axis=0).astype(np.float32)
-
-        # 학습과 동일: reference_joint_pos (궤적 목표 위치)
         data["reference_joint_pos"] = ref.astype(np.float32, copy=False)
+        self._push_action_history(self._last_actions)
+        data["last_actions"] = self._last_actions_vec(None)
 
         obs_vec = self._pack_obs(data)
         if obs_vec is not None:
             self._last_obs_vec = obs_vec
         else:
-            if self._last_obs_vec is not None:
-                LOG.debug("obs_vec 없음: 마지막 성공 obs_vec 재사용")
-                obs_vec = self._last_obs_vec
-            else:
+            obs_vec = self._last_obs_vec if self._last_obs_vec is not None else np.zeros(EXPECTED_TOTAL_OBS_DIM, dtype=np.float32)
+            if self._last_obs_vec is None:
                 LOG.warning("obs_vec 없음: 캐시도 없어 policy 입력 0으로 대체")
-                obs_vec = np.zeros(EXPECTED_TOTAL_OBS_DIM, dtype=np.float32)
 
-        # PPO 출력: 18차원(관절만) 또는 19차원(18 joint + 1 speed). 로드된 모델 차원 사용 시 경고 없음
-        expected_dim = (
-            self.policy.expected_action_dim
-            if (self.policy.expected_action_dim is not None)
-            else self.cfg.action_dim
-        )
+        expected_dim = self.policy.expected_action_dim if self.policy.expected_action_dim is not None else self.cfg.action_dim
         policy_output = self.policy.forward(obs_vec, expected_dim)
-        raw_actions = policy_output[:self.cfg.num_joints].astype(np.float32, copy=False)
+        raw_actions = policy_output[: self.cfg.num_joints].astype(np.float32, copy=False)
         if policy_output.size > self.cfg.num_joints:
             raw_speed = float(policy_output[self.cfg.num_joints])
-            normalized_speed = (raw_speed + 1.0) / 2.0
-            normalized_speed = float(np.clip(normalized_speed, 0.0, 1.0))
-            self.speed = self._speed_min + normalized_speed * (self._speed_max - self._speed_min)
-
+            self.speed = self._speed_min + float(np.clip((raw_speed + 1.0) / 2.0, 0.0, 1.0)) * (self._speed_max - self._speed_min)
         data["playback_speed"] = np.array([self.speed], dtype=np.float32)
 
-        # 최종 명령 = ref + raw*residual_scale (먼저 계산 후 재사용)
         actions = (ref + raw_actions * self.residual_scale).astype(np.float32, copy=False)
         self._last_published_action = actions.copy()
-
-        # 다음 스텝 obs용: 적용된 관절 위치 18차원 저장
-        self._last_actions = actions.copy()
-        self._action_history.append(self._last_actions.copy())
-        if len(self._action_history) > self._history_length:
-            self._action_history.pop(0)
-        if len(self._action_history) == self._history_length:
-            data["last_actions"] = np.concatenate(self._action_history, axis=0).astype(np.float32)
-        else:
-            padded_history = self._action_history + [
-                np.zeros(self._last_actions_obs_dim, dtype=np.float32)
-                for _ in range(self._history_length - len(self._action_history))
-            ]
-            data["last_actions"] = np.concatenate(padded_history, axis=0).astype(np.float32)
-
-        if self.publish_last_action_cb is not None:
-            self.publish_last_action_cb(data["last_actions"])
-        if self.publish_action_cb is not None:
-            self.publish_action_cb(actions)
+        self._last_raw_actions_for_log = raw_actions.copy()
+        self._last_actions = raw_actions.copy()
+        self._push_action_history(raw_actions)
+        data["last_actions"] = self._last_actions_vec(None)
+        self._publish_actions(actions, data["last_actions"])
 
 
 class TrajectoryLoader:
@@ -455,9 +365,9 @@ class TrajectoryLoader:
             name_to_idx = {n: i for i, n in enumerate(joint_names)}
             idxs = [name_to_idx[name] for name in ALLEX_ACTION_JOINT_NAMES if name in name_to_idx]
             if len(idxs) == len(ALLEX_ACTION_JOINT_NAMES):
-                action_ok = True
                 action_indices = idxs
-                order_ok = [joint_names[i] for i in action_indices] == list(ALLEX_ACTION_JOINT_NAMES)
+                action_ok = True
+                order_ok = all(joint_names[i] == n for i, n in zip(action_indices, ALLEX_ACTION_JOINT_NAMES))
 
         if action_indices is not None:
             actions_trajectory = positions[:, action_indices].astype(np.float32, copy=False)
